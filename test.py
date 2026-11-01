@@ -933,6 +933,48 @@ class FastPhotoSorterTests(unittest.TestCase):
                 [os.path.basename(path) for _, path in records], ["visible.jpg"]
             )
 
+    def test_delete_ignored_until_current_image_is_shown(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "unseen.jpg")
+            window.image_paths = [path, os.path.join("photos", "next.jpg")]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.update_view()
+            self.assertEqual(window.image_label.text(), "加载中...")
+
+            window.keyPressEvent(Event(Qt.Key.Key_W))
+            self.assertEqual(window.pending_deletions, {})
+            self.assertEqual(window.current_index, 0)
+
+            window.cache[0] = (
+                QPixmap(),
+                {
+                    "size_mb": 0.1,
+                    "resolution": "未知",
+                    "date": "未知",
+                    "error": "图片加载失败",
+                },
+                path,
+            )
+            window.update_view()
+            window.keyPressEvent(Event(Qt.Key.Key_W))
+            self.assertEqual(
+                [pending[1] for pending in window.pending_deletions.values()], [path]
+            )
+            self.assertEqual(window.current_index, 1)
+        finally:
+            window._begin_shutdown()
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
     def test_failed_preview_keeps_file_name_visible(self):
         class NoStartupSorter(main.FastPhotoSorter):
             def startup_check(self):

@@ -1011,6 +1011,13 @@ class FastPhotoSorter(QMainWindow):
     def _has_current_image(self):
         return 0 <= self.current_index < len(self.image_paths)
 
+    def _current_image_is_shown(self):
+        """True once the current item's preview, or its load error with file name, is on screen."""
+        if not self._has_current_image():
+            return False
+        cache_entry = self.cache.get(self.current_index)
+        return bool(cache_entry) and cache_entry[2] == self.image_paths[self.current_index]
+
     def update_view(self):
         if not self._has_current_image():
             self.image_view.hide()
@@ -1183,7 +1190,9 @@ class FastPhotoSorter(QMainWindow):
         self.update_view()
 
     def action_delete(self):
-        if not self._has_current_image():
+        # While "加载中..." is shown the user has seen neither the photo nor its
+        # file name, so W must not queue a file they never looked at.
+        if not self._current_image_is_shown():
             return
 
         path = self.image_paths[self.current_index]
