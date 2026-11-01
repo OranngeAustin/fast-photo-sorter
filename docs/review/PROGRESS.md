@@ -7,8 +7,8 @@
 | 阶段 | 内容 | 状态 | 产出 / 备注 |
 | --- | --- | --- | --- |
 | 0 | 准备：安装依赖、跑测试基线、建分支、建本文件 | ✅ 完成 | 见下方「基线」 |
-| 1 | 架构摸底 → `01-architecture.md` | ⬜ 未开始 | |
-| 2 | 代码审查 → `02-findings.md` | ⬜ 未开始 | |
+| 1 | 架构摸底 → `01-architecture.md` | ✅ 完成 | 单文件应用；按风险排出 9 段审查顺序 |
+| 2 | 代码审查 → `02-findings.md` | 🚧 进行中 | 按用户补充说明，直接使用 `/code-review`（仓库没有 code-reviewer 子代理） |
 | 3 | 安全审计 → `02-findings.md`「安全」一节 | ⬜ 未开始 | |
 | 4 | 修复高危问题（`claude/review-fixes` → PR 到 main） | ⬜ 未开始 | |
 | 5 | 性能分析 → `03-perf-plan.md` | ⬜ 未开始 | |
@@ -36,3 +36,4 @@
 ## 日志
 
 - 阶段 0：安装依赖并跑通基线；创建 `claude/review-fixes` 与本文件。
+- 阶段 1：读完全部代码，写出 `01-architecture.md`。用实验确认两处行为：EXIF `DateTimeOriginal` 位于 Exif 子 IFD，`getexif()` 顶层读不到；`ImageQt` 不支持 CMYK/LA/I/F 模式。
