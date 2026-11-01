@@ -31,7 +31,7 @@
 | D1 | `claude/review-fixes` 从 `origin/main`（d116f15，已包含 RUNBOOK）创建，并取消对 `origin/main` 的上游跟踪，推送时始终显式写 `origin claude/review-fixes` | 避免任何误推到 main 的可能 |
 | D2 | 依赖装在仓库外的隔离 venv，不修改 `requirements.txt` | 遵守「不升级依赖大版本 / 不改生产配置」 |
 | D3 | 运行环境是 Linux 而非项目目标平台 Windows：Windows 专属行为（隐藏/系统属性、junction、回收站）只能静态审查，相关结论在发现清单里标注把握程度 | 云端无法运行 Windows |
-| D4 | 仓库无 `CLAUDE.md`，因此没有需要跳过的目录 | RUNBOOK 要求跳过 CLAUDE.md 中的忽略目录 |
+| D4 | 阶段 0 时仓库没有 `CLAUDE.md`，所以没有需要跳过的目录。执行期间有人把 PR #1 合并进 `main`（929f857，新增 `CLAUDE.md` 和 `.claude/settings.json`，**不是本流程合并的**）。复核后：其中没有忽略目录清单；本次改动符合它的约定（面向用户的新文字都是中文，新逻辑沿用 session ID 模式）；PR #2 仍可以干净合并进新的 `main` | RUNBOOK 要求跳过 CLAUDE.md 中的忽略目录 |
 | D5 | 阶段 2 用 `/code-review`（high 档），审查对象是 `main.py` 全文件，而不是 diff | 用户补充说明：仓库没有 code-reviewer 子代理；审查目标是整个仓库，没有待审 diff |
 | D6 | 阶段 4 只修 H1。M1（关闭期间仍响应按键）虽然也涉及删除，但属于「中」级，按 RUNBOOK 不修 | RUNBOOK：只修「高」级且把握大的问题 |
 | D7 | 收益最大的 P4（常驻解码子进程）不进入阶段 6，改列为人工下一步建议 | 风险中等（进程生命周期、关闭路径），与「最保守、可回退」原则冲突；入选的 3 项都是低风险 |
@@ -50,3 +50,4 @@
 - 阶段 6.2（P2）：`claude/perf-progress-writes`，先提交特征测试，再提交优化；第 1 种方案即达标；PR #4 → `claude/review-fixes`（未合并）。
 - 阶段 6.3（P3）：`claude/perf-load-priority`，先提交特征测试，再提交优化并新增 `bench_load_priority.py`；第 1 种方案即达标；PR #5 → `claude/review-fixes`（未合并）。
 - 阶段 7：用临时 worktree 验证三个 perf 分支合入后共 47 项测试、0 失败；写出 `00-SUMMARY.md`。全部阶段完成。
+- 收尾复核：`origin/main` 在执行期间被他人更新（合并了 PR #1）；确认 PR #2 与新 main 没有冲突，新 `CLAUDE.md` 不影响已完成的工作。
