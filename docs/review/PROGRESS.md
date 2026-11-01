@@ -8,8 +8,8 @@
 | --- | --- | --- | --- |
 | 0 | 准备：安装依赖、跑测试基线、建分支、建本文件 | ✅ 完成 | 见下方「基线」 |
 | 1 | 架构摸底 → `01-architecture.md` | ✅ 完成 | 单文件应用；按风险排出 9 段审查顺序 |
-| 2 | 代码审查 → `02-findings.md` | 🚧 进行中 | 按用户补充说明，直接使用 `/code-review`（仓库没有 code-reviewer 子代理） |
-| 3 | 安全审计 → `02-findings.md`「安全」一节 | ⬜ 未开始 | |
+| 2 | 代码审查 → `02-findings.md` | ✅ 完成 | 用 `/code-review`（high）加人工复核：高 1 / 中 8 / 低 10 / 待人工确认 4 |
+| 3 | 安全审计 → `02-findings.md`「安全」一节 | 🚧 进行中 | |
 | 4 | 修复高危问题（`claude/review-fixes` → PR 到 main） | ⬜ 未开始 | |
 | 5 | 性能分析 → `03-perf-plan.md` | ⬜ 未开始 | |
 | 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | ⬜ 未开始 | |
@@ -32,8 +32,10 @@
 | D2 | 依赖装在仓库外的隔离 venv，不修改 `requirements.txt` | 遵守「不升级依赖大版本 / 不改生产配置」 |
 | D3 | 运行环境是 Linux 而非项目目标平台 Windows：Windows 专属行为（隐藏/系统属性、junction、回收站）只能静态审查，相关结论在发现清单里标注把握程度 | 云端无法运行 Windows |
 | D4 | 仓库无 `CLAUDE.md`，因此没有需要跳过的目录 | RUNBOOK 要求跳过 CLAUDE.md 中的忽略目录 |
+| D5 | 阶段 2 用 `/code-review`（high 档），审查对象是 `main.py` 全文件，而不是 diff | 用户补充说明：仓库没有 code-reviewer 子代理；审查目标是整个仓库，没有待审 diff |
 
 ## 日志
 
 - 阶段 0：安装依赖并跑通基线；创建 `claude/review-fixes` 与本文件。
 - 阶段 1：读完全部代码，写出 `01-architecture.md`。用实验确认两处行为：EXIF `DateTimeOriginal` 位于 Exif 子 IFD，`getexif()` 顶层读不到；`ImageQt` 不支持 CMYK/LA/I/F 模式。
+- 阶段 2：`/code-review` 报告 10 条，人工复核补充到 19 条，另有 4 条待人工确认，写入 `02-findings.md`。只有 H1（加载中按 W 会删除未看到的照片）定为「高」且把握大。
