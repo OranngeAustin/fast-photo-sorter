@@ -12,7 +12,7 @@
 | 3 | 安全审计 → `02-findings.md`「安全」一节 | ✅ 完成 | 无高危或中危；新增 L11–L15、Q5；`pip-audit` 未发现已知漏洞 |
 | 4 | 修复高危问题（`claude/review-fixes` → PR 到 main） | ✅ 完成 | H1 已修复并加回归测试；33 项测试 32 通过、0 失败、1 跳过；PR [OranngeAustin/fast-photo-sorter#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2) |
 | 5 | 性能分析 → `03-perf-plan.md` | ✅ 完成 | 基准脚本在 `bench/`；7 个热点；入选 P1 JPEG draft、P2 进度写入去重、P3 预加载优先级 |
-| 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | 🚧 进行中 | |
+| 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | 🚧 进行中 | 6.1 P1 ✅ [#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3)：解码 −48.6%，峰值内存 −22% · 6.2 P2 🚧 · 6.3 P3 ⬜ |
 | 7 | 总结 → `00-SUMMARY.md` | ⬜ 未开始 | |
 
 ## 基线（阶段 0）
@@ -35,6 +35,7 @@
 | D5 | 阶段 2 用 `/code-review`（high 档），审查对象是 `main.py` 全文件，而不是 diff | 用户补充说明：仓库没有 code-reviewer 子代理；审查目标是整个仓库，没有待审 diff |
 | D6 | 阶段 4 只修 H1。M1（关闭期间仍响应按键）虽然也涉及删除，但属于「中」级，按 RUNBOOK 不修 | RUNBOOK：只修「高」级且把握大的问题 |
 | D7 | 收益最大的 P4（常驻解码子进程）不进入阶段 6，改列为人工下一步建议 | 风险中等（进程生命周期、关闭路径），与「最保守、可回退」原则冲突；入选的 3 项都是低风险 |
+| D8 | P1 的 JPEG 采用 `reducing_gap=1.0`（像素约差 3/255），没有用 Pillow 默认的 2.0 | 实测默认 2.0 在 1080p 屏幕上看 12 MP 照片时只快约 3%；1.0 快约 49%，且特征测试中与公平 LANCZOS 参考的差异远低于 6/255 阈值。非 JPEG 格式保持逐字节一致 |
 
 ## 日志
 
@@ -44,3 +45,4 @@
 - 阶段 3：静态检查注入、鉴权、凭据、反序列化、路径；对全部 git 历史搜索凭据；`pip-audit` 未发现已知漏洞。追加 5 条低级别问题和 1 条待确认项。
 - 阶段 4：先写 H1 回归测试，确认它在修复前失败；修复后全部测试通过；推送并创建 PR #2（目标 main，未合并）。
 - 阶段 5：新增 `bench/`（preview、scan、progress、memory），测得基线并写出 `03-perf-plan.md`。
+- 阶段 6.1（P1）：`claude/perf-jpeg-draft`，先提交特征测试，再提交优化；第 1 种方案即达标；PR #3 → `claude/review-fixes`（未合并）。
