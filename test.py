@@ -895,6 +895,55 @@ class FastPhotoSorterTests(unittest.TestCase):
                 QTest.qWait(10)
             window.close()
 
+    def test_incomplete_empty_scan_keeps_progress(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            saved = {"status": "in_progress", "last_path": str(root / "a" / "x.jpg")}
+            progress_file.write_text(json.dumps(saved), encoding="utf-8")
+
+            class Label:
+                text = ""
+
+                def setText(self, text):
+                    self.text = text
+
+                def setStyleSheet(self, _style):
+                    pass
+
+                def show(self):
+                    pass
+
+            class View:
+                def hide(self):
+                    pass
+
+            class Dummy:
+                _closing = False
+                session_id = 7
+                current_directory = str(root)
+                image_paths = ["stale.jpg"]
+                path_mtimes = {}
+                path_sort_keys = {}
+                current_index = 5
+                image_label = Label()
+                image_view = View()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+                def _clear_progress(self):
+                    main.FastPhotoSorter._clear_progress(self)
+
+            dummy = Dummy()
+            warning = "扫描进程意外结束。"
+            main.FastPhotoSorter.on_scan_finished(dummy, 7, [], warning)
+
+            self.assertEqual(json.loads(progress_file.read_text(encoding="utf-8")), saved)
+            self.assertEqual(dummy.current_index, -1)
+            self.assertIn("未找到任何图片文件", dummy.image_label.text)
+            self.assertIn(warning, dummy.image_label.text)
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

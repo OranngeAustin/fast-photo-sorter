@@ -884,8 +884,15 @@ class FastPhotoSorter(QMainWindow):
         }
         if not self.image_paths:
             self.current_index = -1
-            self._clear_progress()
-            self.image_label.setText("未找到任何图片文件")
+            message = "未找到任何图片文件"
+            if warning:
+                # An empty result from a scan that hit errors (crashed child,
+                # unreadable folders, a share dropping out) proves nothing about
+                # the folder, so the saved progress must survive it.
+                message += f"\n\n扫描未完整完成，已保留原有进度：\n{warning}"
+            else:
+                self._clear_progress()
+            self.image_label.setText(message)
             self.image_label.setStyleSheet("color: white; font-size: 24px;")
             self.image_label.show()
             self.image_view.hide()
