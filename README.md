@@ -1,62 +1,74 @@
-# Fast Photo Sorter
+# Fast Photo Sorter（极速照片筛选器）
 
-A keyboard-first Windows desktop app for reviewing large photo and screenshot collections one image at a time. Keep a photo, schedule it for deletion, undo within three seconds, and continue without losing your place.
+一个面向大批量照片与截图整理的 Windows 桌面工具。它以“看一张、立即决定一张”为核心：保留、延迟删除、撤销和缩放都可通过键盘完成，同时自动记住进度。
 
-## Download
+## 快速开始
 
-A packaged Windows build is prepared for GitHub Releases. Download the executable from the repository's **Releases** page when available.
+1. 安装 Python 3.12+，并安装依赖：
 
-## Highlights
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-- Recursively scans a chosen folder and its subfolders, then orders images from oldest to newest modification time.
-- Uses a short, reversible deletion window: files move to the Windows Recycle Bin only after the three-second undo period expires.
-- Keeps progress across sessions with a stable path-and-timestamp checkpoint.
-- Loads previews in a cancellable background workflow so old tasks cannot leak into a newly selected folder.
-- Bounds preview and full-resolution image work to avoid unbounded memory usage on very large photos.
-- Skips symlinks and Windows junctions during scanning to avoid directory cycles.
+2. 在项目目录运行 `main.py`，或双击 `启动照片清理.bat`。
 
-## Controls
+   > 启动脚本当前使用 `D:\anaconda3\envs\py312-clean\pythonw.exe`。若本机没有这个环境，请改用自己的 Python 直接运行 `main.py`。
 
-| Action | Shortcut or mouse | Result |
+3. 首次启动时选择要整理的照片根目录。程序会递归扫描其子目录；以后启动会自动打开上次使用的目录并恢复进度。
+
+## 操作速查
+
+| 操作 | 快捷键 / 鼠标 | 行为 |
 | --- | --- | --- |
-| Keep and continue | `D` or `Right Arrow` | Keeps the current photo and opens the next one. |
-| Delete | `W` or `Up Arrow` | Queues the current photo for deletion and opens the next one. |
-| Undo pending deletion | `A` or `Left Arrow` | Cancels the most recent pending deletion within three seconds. |
-| Inspect the original | Hold `Space` or the left mouse button | Temporarily zooms into the original image; drag while zoomed to inspect details. |
-| Choose another folder | `O` | Cancels pending deletions from the old folder and starts a new session. |
-| Toggle fullscreen | `F11` | Switches between fullscreen and windowed mode. |
-| Exit | `Esc` or close the window | Safely cancels unexpired deletions and waits for background read-only work to stop. |
+| 保留并继续 | `D` 或 `→` | 标记当前照片为保留，进入下一张。 |
+| 删除 | `W` 或 `↑` | 先进入下一张；当前文件进入 3 秒待删除窗口。 |
+| 撤销待删除 | `A` 或 `←` | 在 3 秒内撤销最近一次待删除操作并回到该照片。 |
+| 查看原图细节 | 按住 `空格` 或鼠标左键 | 临时加载原图，以 1:1 显示，按下时光标所指的位置保持在光标下（光标不在画面内时以画面中心为准）；松开后恢复适屏预览。放大后可拖动查看细节。 |
+| 选择其他目录 | `O` | 取消旧目录尚未执行的删除，并开始新会话。 |
+| 全屏 / 窗口 | `F11` | 切换显示模式。 |
+| 退出 | `Esc` 或关闭窗口 | 安全取消未到期的删除，并等待后台只读任务停止。 |
 
-## Safety Notes
+### 删除与撤销说明
 
-- Deletions are sent to the Windows Recycle Bin through `Send2Trash`; they are not permanently erased by the app.
-- Changing folders or exiting cancels every pending deletion that is still within its undo window.
-- If Windows rejects a Recycle Bin operation, the photo remains in place and the app returns to it.
-- Only image formats registered by the installed Pillow build are considered. Support for HEIC depends on the Pillow plugins installed on the machine.
+- 删除不是立即粉碎：3 秒倒计时结束后，文件通过 Windows 回收站移动；不会直接永久删除。
+- 切换目录或退出时，所有尚未到期的删除都会自动取消。
+- 如果系统拒绝移入回收站，程序会保留原文件、回到该图片，并在界面上提示失败原因。
 
-## Run from Source
+## 使用要点
 
-Requirements: Python 3.12 or later on Windows.
+- 扫描范围是所选目录及其子目录，排序规则为“修改时间从旧到新”；同一时间的文件再按规范化路径稳定排序。
+- 只扫描照片格式：JPEG / MPO、PNG、WebP、GIF、BMP、TIFF、AVIF、JPEG 2000，以及 HEIC/HEIF（需要 Pillow 插件在运行时注册，例如 pillow-heif 的 `register_heif_opener()`；当前程序不会自动注册）。PDF、EPS/PS、PSD、ICO 等格式即使 Pillow 认识扩展名也不会出现，避免把文档误当成“坏图”删掉。
+- 扫描时自动跳过回收站、快照和缩略图缓存目录：`$RECYCLE.BIN`、`System Volume Information`、`#recycle`、`#snapshot`、`@eaDir`、`@Recycle`、`@Recently-Snapshot`、`@__thumb`，以及所有以 `.` 或 `$` 开头的目录；带 Windows 隐藏 / 系统属性的目录和文件、以 `.` 开头的文件（如 macOS 的 `._IMG_0001.jpg`）也会跳过。所选的根目录本身不受这些规则限制。
+- 进度保存在所选照片目录的 `.sorter_progress.json`，上次目录保存在项目目录的 `config.json`。进度文件记录“进行中 / 已完成”状态，因此全部筛选完后不会意外从头开始。
+- 预览加载失败或图片过大时，程序不会把异常当作删除成功；会显示错误信息，同时保留文件名和进度信息，删除前可以确认是哪一个文件。
+
+## 技术亮点
+
+### 安全、可取消的后台预览
+
+- `ImageLoader` 使用 `QThread` 维护当前项附近的滑动窗口（前 1 张、后 3 张），目录切换时通过会话编号丢弃过期任务，避免旧目录图片串入新目录。
+- 每次 Pillow 预览解码都在只读 `multiprocessing` 子进程中执行。关闭窗口、切换目录或请求失效时，加载线程会终止该子进程，而不会强制终止 Qt 工作线程或阻塞 GUI。
+- 扫描器采用显式栈而非递归，并跳过符号链接和 Windows junction，避免循环目录、递归深度异常和旧扫描结果污染新会话。
+
+### 内存边界与原图缩放保护
+
+- 后台预览先读取源图尺寸。超过 2400 万像素时，JPEG/MPO 会尝试请求解码器降采样；无法安全降采样的格式会保留明确的预览失败提示，而不是无边界地完整解码。
+- 子进程传回 GUI 的 RGBA 预览上限为 600 万像素，限制跨进程传输和缓存的内存峰值。
+- 长按查看原图同样受 2400 万像素上限保护；符合上限时会同步更新可拖动画布范围，超出上限时继续显示适屏预览并提示原因。
+
+### 状态一致性
+
+- 延迟删除使用独立的待执行计时器和删除索引，不会因为快速连续操作造成列表索引漂移。
+- 断点恢复使用稳定的 `(mtime, normcase(path))` 排序键。即使上次停留的文件已在外部被删除，也会定位到严格意义上的下一项。
+- 关闭过程采用协作式取消与异步轮询。若系统级目录访问暂未返回，窗口会保持“安全停止”状态，而不会强杀 Python/Qt 线程。
+
+## 验证与测试
+
+项目包含离屏自动化测试，覆盖扫描、会话隔离、损坏图片、超大图片、删除失败与撤销、断点恢复、缩放、真实子进程解码和安全关闭等场景。
 
 ```powershell
-python -m pip install -r requirements.txt
-python main.py
+$env:QT_QPA_PLATFORM='offscreen'
+D:\anaconda3\envs\py312-clean\python.exe -X utf8 -B -m unittest -v test.py
 ```
 
-When run from source, the app stores its last selected folder in a local `config.json` file. The packaged EXE instead stores it in `%LOCALAPPDATA%\FastPhotoSorter\config.json`. Photo-review progress is stored as `.sorter_progress.json` inside the selected photo folder. These files are intentionally ignored by Git.
-
-## Build a Windows Executable
-
-```powershell
-python -m pip install pyinstaller
-python -m PyInstaller --noconfirm --clean --windowed --onefile --name FastPhotoSorter main.py
-```
-
-## Tests
-
-```powershell
-$env:QT_QPA_PLATFORM = 'offscreen'
-python -X utf8 -B -m unittest -v test.py
-```
-
-The test suite covers scanning, session isolation, corrupted and oversized images, deletion and undo behavior, progress recovery, zooming, subprocess decoding, and safe shutdown.
+当前测试套件共 32 项。

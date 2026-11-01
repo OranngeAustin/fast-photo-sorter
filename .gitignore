@@ -1,21 +1,10 @@
-# Python bytecode and test caches
+# Python / pytest 缓存
 __pycache__/
-*.py[cod]
 .pytest_cache/
 
-# Per-user application state and logs
+# 运行时生成：上次打开的照片目录（含个人路径）
 config.json
-.sorter_progress.json
+
+# 日志
 *.log
 log.txt
-
-# PyInstaller and release artifacts
-.build/
-build/
-dist/
-release/
-*.spec
-
-# Editor settings
-.vscode/
-.idea/

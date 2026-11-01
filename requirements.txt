@@ -1,3 +1,5 @@
-Pillow
-PyQt6
-Send2Trash
+# Runtime dependencies. Tested with Python 3.12 and the versions below;
+# older versions have not been verified.
+PyQt6>=6.11
+Pillow>=12.2
+Send2Trash>=1.8.3

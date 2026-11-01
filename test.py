@@ -1,15 +1,18 @@
+import ctypes
 import json
 import os
+import stat
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtTest import QTest
@@ -208,6 +211,9 @@ class FastPhotoSorterTests(unittest.TestCase):
             def is_file(self, follow_symlinks=False):
                 return False
 
+            def stat(self, follow_symlinks=False):
+                return SimpleNamespace(st_file_attributes=0)
+
         class FakeEntries:
             def __init__(self, entries):
                 self.entries = entries
@@ -297,7 +303,7 @@ class FastPhotoSorterTests(unittest.TestCase):
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0][0], 3)
         self.assertEqual(received[0][1], [])
-        self.assertIn("Scan supervisor failed: spawn failed", received[0][2])
+        self.assertIn("扫描监督器失败：spawn failed", received[0][2])
 
     def test_scanner_stops_uninterruptible_child_after_cancel_deadline(self):
         scanner = main.DirectoryScanner("blocked-network-share", 4)
@@ -610,7 +616,7 @@ class FastPhotoSorterTests(unittest.TestCase):
 
             self.assertEqual(len(received), 1)
             self.assertTrue(received[0][0])
-            self.assertIn("too large", received[0][1]["error"])
+            self.assertIn("像素过大", received[0][1]["error"])
 
     def test_shutdown_requests_cooperative_worker_interruption(self):
         calls = []
@@ -696,6 +702,46 @@ class FastPhotoSorterTests(unittest.TestCase):
             self.assertTrue(warnings)
             view.close()
 
+    def test_zoom_keeps_pressed_image_point_under_cursor(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image_path = Path(temporary_directory) / "wide.jpg"
+            Image.new("RGB", (3000, 2000), (1, 2, 3)).save(image_path)
+            thumbnail = QImage(750, 500, QImage.Format.Format_ARGB32)
+            thumbnail.fill(0)
+            view = main.ZoomableView()
+            view.resize(800, 600)
+            view.show()
+            self.app.processEvents()
+            try:
+                view.setPixmap(QPixmap.fromImage(thumbnail), str(image_path))
+                for press in (QPoint(600, 200), QPoint(200, 420), QPoint(400, 300)):
+                    on_preview = view.mapToScene(press)
+                    expected_x = on_preview.x() * 3000 / 750
+                    expected_y = on_preview.y() * 2000 / 500
+
+                    QTest.mousePress(
+                        view.viewport(), Qt.MouseButton.LeftButton, pos=press
+                    )
+                    self.assertTrue(view.is_zoomed)
+                    on_full = view.mapToScene(press)
+                    self.assertAlmostEqual(on_full.x(), expected_x, delta=2)
+                    self.assertAlmostEqual(on_full.y(), expected_y, delta=2)
+
+                    QTest.mouseRelease(
+                        view.viewport(), Qt.MouseButton.LeftButton, pos=press
+                    )
+                    self.assertFalse(view.is_zoomed)
+
+                # A cursor outside the viewport (keyboard zoom) anchors on its center.
+                viewport_center = view.viewport().rect().center()
+                on_preview = view.mapToScene(viewport_center)
+                view.set_zoom(True, QPoint(-50, -50))
+                on_full = view.mapToScene(viewport_center)
+                self.assertAlmostEqual(on_full.x(), on_preview.x() * 3000 / 750, delta=2)
+                self.assertAlmostEqual(on_full.y(), on_preview.y() * 2000 / 500, delta=2)
+            finally:
+                view.close()
+
     def test_stale_loader_signal_is_ignored(self):
         class Dummy:
             _closing = False
@@ -717,7 +763,7 @@ class FastPhotoSorterTests(unittest.TestCase):
             0,
             "old.jpg",
             qimage,
-            {"size_mb": 0.0, "resolution": "1 x 1", "date": "Unknown"},
+            {"size_mb": 0.0, "resolution": "1 x 1", "date": "未知"},
         )
         self.assertEqual(Dummy.cache, {})
 
@@ -774,7 +820,7 @@ class FastPhotoSorterTests(unittest.TestCase):
 
             self.assertFalse(progress_file.exists())
             self.assertEqual(dummy.current_index, -1)
-            self.assertEqual(label.text, "No image files found")
+            self.assertEqual(label.text, "未找到任何图片文件")
             self.assertTrue(view.hidden)
 
             new_path = str(root / "new.jpg")
@@ -812,6 +858,115 @@ class FastPhotoSorterTests(unittest.TestCase):
 
             self.assertEqual(data["status"], "in_progress")
             self.assertEqual(data["last_path"], image_path)
+
+    def test_scanner_keeps_only_photo_formats(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            for name in (
+                "photo.jpg",
+                "shot.png",
+                "phone.webp",
+                "report.pdf",
+                "art.eps",
+                "page.ps",
+                "layers.psd",
+                "icon.ico",
+                "export.palm",
+            ):
+                (root / name).write_bytes(b"x")
+
+            records = []
+            main._scan_directory_records(str(root), lambda: False, records.extend, 64)
+
+            self.assertEqual(
+                sorted(os.path.basename(path) for _, path in records),
+                ["phone.webp", "photo.jpg", "shot.png"],
+            )
+
+    def test_scanner_skips_recycle_bins_thumbnail_caches_and_dot_files(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / ".chosen-root"
+            for relative_path in (
+                "keep.jpg",
+                "trip/day1.jpg",
+                "trip/._day1.jpg",
+                "$RECYCLE.BIN/S-1-5-21/$R0001.jpg",
+                "System Volume Information/restore.jpg",
+                "#recycle/old.jpg",
+                "#snapshot/GMT+08-2026.09.01/keep.jpg",
+                "@eaDir/keep.jpg/SYNOPHOTO_THUMB_XL.jpg",
+                "@Recycle/old.jpg",
+                ".thumbnails/123.jpg",
+            ):
+                path = root / relative_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"x")
+
+            records = []
+            main._scan_directory_records(str(root), lambda: False, records.extend, 64)
+
+            self.assertEqual(
+                sorted(os.path.relpath(path, root) for _, path in records),
+                ["keep.jpg", os.path.join("trip", "day1.jpg")],
+            )
+
+    @unittest.skipUnless(os.name == "nt", "Windows file attributes")
+    def test_scanner_skips_windows_hidden_and_system_entries(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            hidden_directory = root / "Private"
+            hidden_directory.mkdir()
+            (hidden_directory / "inside.jpg").write_bytes(b"x")
+            system_file = root / "system.jpg"
+            system_file.write_bytes(b"x")
+            (root / "visible.jpg").write_bytes(b"x")
+            set_attributes = ctypes.windll.kernel32.SetFileAttributesW
+            self.assertTrue(
+                set_attributes(str(hidden_directory), stat.FILE_ATTRIBUTE_HIDDEN)
+            )
+            self.assertTrue(set_attributes(str(system_file), stat.FILE_ATTRIBUTE_SYSTEM))
+
+            records = []
+            main._scan_directory_records(str(root), lambda: False, records.extend, 64)
+
+            self.assertEqual(
+                [os.path.basename(path) for _, path in records], ["visible.jpg"]
+            )
+
+    def test_failed_preview_keeps_file_name_visible(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "broken.jpg")
+            window.image_paths = [path]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.cache[0] = (
+                QPixmap(),
+                {
+                    "size_mb": 0.1,
+                    "resolution": "未知",
+                    "date": "未知",
+                    "error": "图片加载失败",
+                },
+                path,
+            )
+            window.update_view()
+
+            self.assertEqual(window.image_label.text(), "图片加载失败")
+            self.assertFalse(window.osd_label.isHidden())
+            self.assertIn("broken.jpg", window.osd_label.text())
+            self.assertIn("1 / 1", window.osd_label.text())
+        finally:
+            window._begin_shutdown()
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
 
 
 if __name__ == "__main__":

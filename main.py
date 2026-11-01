@@ -1,6 +1,7 @@
 import json
 import multiprocessing
 import os
+import stat
 import sys
 import threading
 import time
@@ -8,8 +9,18 @@ from queue import Empty, Queue
 
 from PIL import ExifTags, Image, ImageOps
 from PIL.ImageQt import ImageQt
-from PyQt6.QtCore import QFileInfo, QSize, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QImage, QPalette, QPixmap, QFont
+from PyQt6.QtCore import (
+    QFileInfo,
+    QPointF,
+    QRectF,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QColor, QCursor, QImage, QPalette, QPixmap, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -47,7 +58,7 @@ def _decode_preview_in_subprocess(
 ):
     """Decode a read-only preview in a child process that may be safely stopped."""
     try:
-        metadata = {"resolution": "Unknown", "date": "Unknown"}
+        metadata = {"resolution": "未知", "date": "未知"}
         with Image.open(path) as pil_img:
             exif = pil_img.getexif()
             if exif and exif_datetime_tag is not None and exif_datetime_tag in exif:
@@ -86,7 +97,7 @@ def _decode_preview_in_subprocess(
                     rgba_image.tobytes(),
                 )
             else:
-                metadata["error"] = "The image is too large to preview safely in this format."
+                metadata["error"] = "图片像素过大，当前格式无法安全生成预览。"
                 result = ("ok", metadata, 0, 0, b"")
     except Exception as exc:
         result = ("error", str(exc))
@@ -224,14 +235,14 @@ class ImageLoader(QThread):
                     try:
                         return receive_connection.recv()
                     except EOFError:
-                        return ("error", "Preview decoder returned no result")
+                        return ("error", "预览解码进程未返回结果")
                 if not process.is_alive():
                     if receive_connection.poll(self.DECODE_POLL_SECONDS):
                         try:
                             return receive_connection.recv()
                         except EOFError:
                             pass
-                    return ("error", "Preview decoder ended unexpectedly")
+                    return ("error", "预览解码进程意外结束")
         except Exception as exc:
             return ("error", str(exc))
         finally:
@@ -248,7 +259,7 @@ class ImageLoader(QThread):
             return QImage()
         expected_bytes = width * height * 4
         if len(pixels) != expected_bytes:
-            raise ValueError("Preview image data length does not match")
+            raise ValueError("预览图像数据长度不匹配")
         return QImage(
             pixels,
             width,
@@ -279,7 +290,7 @@ class ImageLoader(QThread):
                 continue
 
             qimage = QImage()
-            metadata = {"size_mb": 0.0, "resolution": "Unknown", "date": "Unknown"}
+            metadata = {"size_mb": 0.0, "resolution": "未知", "date": "未知"}
             try:
                 file_info = QFileInfo(path)
                 metadata["size_mb"] = file_info.size() / (1024 * 1024)
@@ -287,25 +298,25 @@ class ImageLoader(QThread):
                 if result is None:
                     continue
                 if not isinstance(result, tuple) or not result:
-                    raise ValueError("Preview decoder returned an invalid result")
+                    raise ValueError("预览解码进程返回了无效结果")
                 if result[0] == "error":
                     raise RuntimeError(result[1])
                 if result[0] != "ok" or len(result) != 5:
-                    raise ValueError("Preview decoder returned an unknown result")
+                    raise ValueError("预览解码进程返回了未知结果")
 
                 _, preview_metadata, width, height, pixels = result
                 if not isinstance(preview_metadata, dict):
-                    raise ValueError("Preview metadata is invalid")
+                    raise ValueError("预览元数据无效")
                 metadata.update(preview_metadata)
                 qimage = self._qimage_from_rgba(width, height, pixels)
-                if metadata["date"] == "Unknown":
+                if metadata["date"] == "未知":
                     metadata["date"] = (
                         file_info.birthTime().toString("yyyy-MM-dd HH:mm:ss")
-                        or "Unknown"
+                        or "未知"
                     )
             except Exception as exc:
                 print(f"Failed to load {path}: {exc}")
-                metadata["error"] = "Failed to load image"
+                metadata["error"] = "图片加载失败"
 
             if not self._should_stop_request(queue, request):
                 self.image_loaded.emit(session_id, index, path, qimage, metadata)
@@ -318,10 +329,58 @@ def _is_linked_directory(entry):
     return bool(isjunction and isjunction(entry.path))
 
 
+# Pillow also registers documents (.pdf/.eps/.ps), scientific stubs and save-only
+# writers (.palm); only real photo formats may reach the delete key.
+PHOTO_FORMATS = frozenset(
+    {"JPEG", "MPO", "PNG", "WEBP", "GIF", "BMP", "DIB", "TIFF", "HEIF", "AVIF", "JPEG2000"}
+)
+_SKIPPED_DIRECTORY_PREFIXES = (".", "$")
+_SKIPPED_DIRECTORY_NAMES = frozenset(
+    {
+        "system volume information",
+        "#recycle",
+        "#snapshot",
+        "@eadir",
+        "@recycle",
+        "@recently-snapshot",
+        "@__thumb",
+    }
+)
+_HIDDEN_OR_SYSTEM = stat.FILE_ATTRIBUTE_HIDDEN | stat.FILE_ATTRIBUTE_SYSTEM
+
+
+def _photo_extensions():
+    Image.init()
+    return {
+        extension.lower()
+        for extension, image_format in Image.registered_extensions().items()
+        if image_format in PHOTO_FORMATS
+    }
+
+
+def _has_hidden_or_system_attribute(entry):
+    attributes = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
+    return bool(attributes & _HIDDEN_OR_SYSTEM)
+
+
+def _is_skipped_directory(entry):
+    """Recycle bins, NAS snapshots/thumbnail caches and hidden system folders."""
+    name = entry.name
+    return (
+        name.startswith(_SKIPPED_DIRECTORY_PREFIXES)
+        or name.lower() in _SKIPPED_DIRECTORY_NAMES
+        or _has_hidden_or_system_attribute(entry)
+    )
+
+
+def _is_skipped_file(entry):
+    """Dot files such as macOS AppleDouble "._IMG_0001.jpg", and hidden/system files."""
+    return entry.name.startswith(".") or _has_hidden_or_system_attribute(entry)
+
+
 def _scan_directory_records(directory, is_cancelled, emit_batch, batch_size):
     """Enumerate a directory tree without writing to the filesystem."""
-    Image.init()
-    valid_exts = {extension.lower() for extension in Image.registered_extensions()}
+    valid_exts = _photo_extensions()
     warnings = []
     visited = set()
     stack = [directory]
@@ -352,11 +411,14 @@ def _scan_directory_records(directory, is_cancelled, emit_batch, batch_size):
                         break
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            if not _is_linked_directory(entry):
+                            if not (
+                                _is_linked_directory(entry)
+                                or _is_skipped_directory(entry)
+                            ):
                                 stack.append(entry.path)
                         elif entry.is_file(follow_symlinks=False):
                             extension = os.path.splitext(entry.name)[1].lower()
-                            if extension in valid_exts:
+                            if extension in valid_exts and not _is_skipped_file(entry):
                                 batch.append(
                                     (entry.stat(follow_symlinks=False).st_mtime, entry.path)
                                 )
@@ -364,10 +426,10 @@ def _scan_directory_records(directory, is_cancelled, emit_batch, batch_size):
                                     flush_batch()
                     except OSError as exc:
                         if len(warnings) < 3:
-                            warnings.append(f"Skipped inaccessible item: {entry.path} ({exc})")
+                            warnings.append(f"跳过无法访问的项目：{entry.path} ({exc})")
         except OSError as exc:
             if len(warnings) < 3:
-                warnings.append(f"Skipped inaccessible directory: {current_directory} ({exc})")
+                warnings.append(f"跳过无法扫描的目录：{current_directory} ({exc})")
 
     if is_cancelled():
         return True, warnings
@@ -393,7 +455,7 @@ def _scan_directory_in_subprocess(
             result_connection.send(("finished", warnings))
     except Exception as exc:
         try:
-            result_connection.send(("error", f"Scan process failed: {exc}"))
+            result_connection.send(("error", f"扫描进程失败：{exc}"))
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
@@ -497,7 +559,7 @@ class DirectoryScanner(QThread):
 
                     if not isinstance(message, tuple) or not message:
                         if not self._cancelled():
-                            warnings.append("Scan process returned no valid result.")
+                            warnings.append("扫描进程未返回有效结果。")
                         break
 
                     message_type = message[0]
@@ -517,16 +579,16 @@ class DirectoryScanner(QThread):
                 elif not process.is_alive():
                     if receive_connection.poll(self.POLL_SECONDS):
                         continue
-                    warnings.append("Scan process ended unexpectedly.")
+                    warnings.append("扫描进程意外结束。")
                     break
 
             if not self._cancelled():
                 if not completed and not warnings:
-                    warnings.append("Scan did not complete normally.")
+                    warnings.append("扫描未正常完成。")
                 self._emit_scan_result(image_data, warnings)
         except Exception as exc:
             if not self._cancelled():
-                warnings.append(f"Scan supervisor failed: {exc}")
+                warnings.append(f"扫描监督器失败：{exc}")
                 self._emit_scan_result(image_data, warnings)
         finally:
             if process is not None:
@@ -578,7 +640,18 @@ class ZoomableView(QGraphicsView):
             self.is_zoomed = False
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
-    def set_zoom(self, zoomed):
+    def _anchor_fraction(self, anchor):
+        """Where a viewport point falls on the shown pixmap, as clamped 0..1 fractions."""
+        rect = self.pixmap_item.boundingRect()
+        scene_pos = self.mapToScene(anchor)
+        return (
+            min(max(scene_pos.x() / rect.width(), 0.0), 1.0),
+            min(max(scene_pos.y() / rect.height(), 0.0), 1.0),
+        )
+
+    def set_zoom(self, zoomed, anchor=None):
+        """Toggle 1:1 zoom; the image point under ``anchor`` (viewport coords,
+        defaulting to the cursor) stays under it."""
         if not self.original_pixmap or self.original_pixmap.isNull():
             return
 
@@ -586,12 +659,21 @@ class ZoomableView(QGraphicsView):
             if not self.image_path or not os.path.exists(self.image_path):
                 return
 
+            viewport_rect = self.viewport().rect()
+            if anchor is None:
+                anchor = self.viewport().mapFromGlobal(QCursor.pos())
+            if not viewport_rect.contains(anchor):
+                anchor = viewport_rect.center()
+            # Measure on the preview: once the full image is swapped in, the fit
+            # transform no longer matches the scene and mapToScene would be wrong.
+            fraction_x, fraction_y = self._anchor_fraction(anchor)
+
             try:
                 with Image.open(self.image_path) as pil_img:
                     source_pixels = pil_img.width * pil_img.height
                     if source_pixels > self.MAX_FULL_ZOOM_PIXELS:
                         self.zoom_warning.emit(
-                            "The original image is too large; the fit-to-screen preview remains to avoid exhausting memory."
+                            "原图像素过大，已保留适屏预览以避免内存耗尽。"
                         )
                         return
 
@@ -601,14 +683,18 @@ class ZoomableView(QGraphicsView):
                     self._update_scene_rect()
             except Exception as exc:
                 print(f"Failed to load full res: {exc}")
-                self.zoom_warning.emit("Failed to load the original image; the fit-to-screen preview remains available.")
+                self.zoom_warning.emit("原图加载失败，已保留适屏预览。")
                 return
 
-            mouse_pos = self.mapToScene(self.mapFromGlobal(self.cursor().pos()))
             self.resetTransform()
             self.is_zoomed = True
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            self.centerOn(mouse_pos)
+            full_rect = self.pixmap_item.boundingRect()
+            offset = QRectF(viewport_rect).center() - QPointF(anchor)
+            self.centerOn(
+                full_rect.width() * fraction_x + offset.x(),
+                full_rect.height() * fraction_y + offset.y(),
+            )
 
         elif not zoomed and self.is_zoomed:
             self.pixmap_item.setPixmap(self.original_pixmap)
@@ -618,7 +704,7 @@ class ZoomableView(QGraphicsView):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.set_zoom(True)
+            self.set_zoom(True, event.position().toPoint())
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -695,16 +781,6 @@ class FastPhotoSorter(QMainWindow):
 
     @staticmethod
     def _config_path():
-        if getattr(sys, "frozen", False):
-            config_dir = os.path.join(
-                os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-                "FastPhotoSorter",
-            )
-            try:
-                os.makedirs(config_dir, exist_ok=True)
-                return os.path.join(config_dir, "config.json")
-            except OSError:
-                pass
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
     def startup_check(self):
@@ -722,7 +798,7 @@ class FastPhotoSorter(QMainWindow):
 
     def select_directory(self):
         directory = QFileDialog.getExistingDirectory(
-            self, "Select Photo Folder (all subfolders will be scanned)"
+            self, "选择照片文件夹 (将递归扫描所有子文件夹)"
         )
         if not directory:
             if not self.image_paths:
@@ -781,7 +857,7 @@ class FastPhotoSorter(QMainWindow):
             print(f"Error saving config.json: {exc}")
 
         self.image_view.hide()
-        self.image_label.setText("Scanning photos quickly, please wait...")
+        self.image_label.setText("正在快速扫描照片，请稍候...")
         self.image_label.setStyleSheet("color: white; font-size: 24px;")
         self.image_label.show()
         self.osd_label.hide()
@@ -809,7 +885,7 @@ class FastPhotoSorter(QMainWindow):
         if not self.image_paths:
             self.current_index = -1
             self._clear_progress()
-            self.image_label.setText("No image files found")
+            self.image_label.setText("未找到任何图片文件")
             self.image_label.setStyleSheet("color: white; font-size: 24px;")
             self.image_label.show()
             self.image_view.hide()
@@ -940,7 +1016,7 @@ class FastPhotoSorter(QMainWindow):
             self.image_view.hide()
             self.image_label.show()
             self.image_label.setText(
-                "All photos have been sorted!"
+                "全部照片整理完毕！"
                 if self.current_index >= len(self.image_paths) and self.image_paths
                 else ""
             )
@@ -949,63 +1025,66 @@ class FastPhotoSorter(QMainWindow):
             return
 
         self.request_cache()
+        path = self.image_paths[self.current_index]
         cache_entry = self.cache.get(self.current_index)
-        if cache_entry and cache_entry[2] == self.image_paths[self.current_index]:
+        if cache_entry and cache_entry[2] == path:
             pixmap, metadata, _ = cache_entry
             if pixmap.isNull():
+                # W still works on a failed preview, so the file name must stay visible.
                 self.image_view.hide()
+                self.image_label.setText(metadata.get("error", "图片加载失败"))
+                self.image_label.setStyleSheet("color: white; font-size: 24px;")
                 self.image_label.show()
-                self.image_label.setText(metadata.get("error", "Failed to load image"))
-                self.osd_label.hide()
-                return
-
-            self.image_label.hide()
-            self.image_view.show()
-            self.image_view.setPixmap(pixmap, self.image_paths[self.current_index])
-
-            filename = os.path.basename(self.image_paths[self.current_index])
-            progress = f"{self.current_index + 1} / {len(self.image_paths)}"
-            osd_text = (
-                f"File name: {filename}\n"
-                f"Progress: {progress}\n"
-                f"Date taken: {metadata['date']}\n"
-                f"Resolution: {metadata['resolution']}\n"
-                f"Size: {metadata['size_mb']:.2f} MB\n\n"
-                f" ──────────────\n"
-                f" Space/Left click: Hold to zoom original\n"
-                f" D: Keep / Next photo\n"
-                f" W: Delete\n"
-                f" A: Undo\n"
-                f" O: Open another folder\n"
-                f" F11: Toggle fullscreen"
-            )
-
-            if (
-                self.last_action
-                and self.last_action["action"] == "delete"
-                and self.last_action["session_id"] == self.session_id
-            ):
-                osd_text += "\n\n[Previous photo deleted — press A to undo]"
-                self.osd_label.setStyleSheet(
-                    "color: #ffaa00; background-color: rgba(0, 0, 0, 200);"
-                    "padding: 15px; border-radius: 8px; border: 1px solid #ffaa00;"
-                )
             else:
-                self.osd_label.setStyleSheet(
-                    "color: white; background-color: rgba(0, 0, 0, 150);"
-                    "padding: 15px; border-radius: 8px; border: none;"
-                )
-
-            self.osd_label.setText(osd_text)
-            self.osd_label.show()
-            self.update_osd_position()
+                self.image_label.hide()
+                self.image_view.show()
+                self.image_view.setPixmap(pixmap, path)
+            self._show_osd(path, metadata)
             return
 
         self.image_view.hide()
         self.image_label.show()
-        self.image_label.setText("Loading...")
+        self.image_label.setText("加载中...")
         self.image_label.setStyleSheet("color: white; font-size: 24px;")
         self.osd_label.hide()
+
+    def _show_osd(self, path, metadata):
+        filename = os.path.basename(path)
+        progress = f"{self.current_index + 1} / {len(self.image_paths)}"
+        osd_text = (
+            f"文件名: {filename}\n"
+            f"进度: {progress}\n"
+            f"拍摄时间: {metadata['date']}\n"
+            f"分辨率: {metadata['resolution']}\n"
+            f"大小: {metadata['size_mb']:.2f} MB\n\n"
+            f" ──────────────\n"
+            f" 空格/左键 : 按住放大原图\n"
+            f" D : 保留/下一张\n"
+            f" W : 删除\n"
+            f" A : 撤销\n"
+            f" O : 打开其他文件夹\n"
+            f" F11 : 全屏切换"
+        )
+
+        if (
+            self.last_action
+            and self.last_action["action"] == "delete"
+            and self.last_action["session_id"] == self.session_id
+        ):
+            osd_text += "\n\n[已删除上一张，按 A 撤销]"
+            self.osd_label.setStyleSheet(
+                "color: #ffaa00; background-color: rgba(0, 0, 0, 200);"
+                "padding: 15px; border-radius: 8px; border: 1px solid #ffaa00;"
+            )
+        else:
+            self.osd_label.setStyleSheet(
+                "color: white; background-color: rgba(0, 0, 0, 150);"
+                "padding: 15px; border-radius: 8px; border: none;"
+            )
+
+        self.osd_label.setText(osd_text)
+        self.osd_label.show()
+        self.update_osd_position()
 
     def request_cache(self):
         needed_indices = list(
@@ -1049,13 +1128,13 @@ class FastPhotoSorter(QMainWindow):
             return
         existing_text = self.osd_label.text()
         if message not in existing_text:
-            self.osd_label.setText(f"{existing_text}\n\n[Zoom notice] {message}")
+            self.osd_label.setText(f"{existing_text}\n\n[缩放提示] {message}")
         self.osd_label.show()
         self.update_osd_position()
 
     def show_operation_error(self, message):
         existing_text = self.osd_label.text()
-        self.osd_label.setText(f"{existing_text}\n\n[Operation failed] {message}")
+        self.osd_label.setText(f"{existing_text}\n\n[操作失败] {message}")
         self.osd_label.show()
         self.update_osd_position()
 
@@ -1139,10 +1218,10 @@ class FastPhotoSorter(QMainWindow):
         try:
             if not delete_succeeded:
                 send2trash(os.path.normpath(path))
-                print(f"Moved to Recycle Bin: {path}")
+                print(f"已移至回收站: {path}")
                 delete_succeeded = True
         except Exception as exc:
-            print(f"Delete failed for {path}: {exc}")
+            print(f"删除失败 {path}: {exc}")
 
         if delete_succeeded and session_id == self.session_id:
             self.deleted_indices.add(index)
@@ -1159,7 +1238,7 @@ class FastPhotoSorter(QMainWindow):
                 self.save_progress()
                 self.update_view()
                 self.show_operation_error(
-                    "Could not move the photo to the Recycle Bin. Returned to it; please try again."
+                    "无法移入回收站，已回到该图片，请稍后重试。"
                 )
             return
 
@@ -1180,7 +1259,7 @@ class FastPhotoSorter(QMainWindow):
 
         pending = self.pending_deletions.pop(action["timer_id"], None)
         if pending is None:
-            print(f"Unable to undo deletion: the {self.UNDO_TIMEOUT_MS // 1000}-second window has expired and the file is already in the Recycle Bin")
+            print(f"撤销删除操作失败：已超过 {self.UNDO_TIMEOUT_MS // 1000} 秒限制，文件已在回收站")
             self.update_view()
             return
 
@@ -1216,7 +1295,7 @@ class FastPhotoSorter(QMainWindow):
         self._cancel_scanners()
         self.image_view.hide()
         self.osd_label.hide()
-        self.image_label.setText("Stopping background tasks, please wait...")
+        self.image_label.setText("正在停止后台任务，请稍候...")
         self.image_label.setStyleSheet("color: white; font-size: 24px;")
         self.image_label.show()
         QTimer.singleShot(50, self._finish_shutdown)
@@ -1232,7 +1311,7 @@ class FastPhotoSorter(QMainWindow):
             and time.monotonic() >= self._shutdown_deadline
         ):
             self._shutdown_waiting_notice_shown = True
-            self.image_label.setText("Background tasks are stopping safely; waiting for the current read-only operation to return...")
+            self.image_label.setText("后台任务仍在安全停止，正在等待当前只读操作返回...")
             self._request_worker_interruption()
 
         if self._workers_are_running():
