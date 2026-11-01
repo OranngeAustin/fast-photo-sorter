@@ -738,6 +738,7 @@ class FastPhotoSorter(QMainWindow):
         self.deleted_indices = set()
         self.pending_deletions = {}
         self.last_action = None
+        self._saved_progress = None
         self.session_id = 0
         self._scanners = set()
         self._closing = False
@@ -844,6 +845,7 @@ class FastPhotoSorter(QMainWindow):
         self.path_sort_keys = {}
         self.cache.clear()
         self.deleted_indices.clear()
+        self._saved_progress = None
         self.loader.begin_session(self.session_id)
 
     def load_directory(self, directory):
@@ -898,6 +900,7 @@ class FastPhotoSorter(QMainWindow):
         return os.path.join(self.current_directory, ".sorter_progress.json")
 
     def _clear_progress(self):
+        self._saved_progress = None
         progress_file = self._progress_path()
         try:
             if os.path.isfile(progress_file):
@@ -1002,11 +1005,19 @@ class FastPhotoSorter(QMainWindow):
                     ),
                 }
 
+        progress_file = self._progress_path()
+        # Each navigation reaches here twice (the action, then request_cache);
+        # skip rewriting a checkpoint that is already on disk.
+        if getattr(self, "_saved_progress", None) == (progress_file, data):
+            return
         try:
-            with open(self._progress_path(), "w", encoding="utf-8") as progress_handle:
+            with open(progress_file, "w", encoding="utf-8") as progress_handle:
                 json.dump(data, progress_handle, ensure_ascii=False)
         except Exception as exc:
+            self._saved_progress = None
             print(f"Failed to save progress: {exc}")
+        else:
+            self._saved_progress = (progress_file, data)
 
     def _has_current_image(self):
         return 0 <= self.current_index < len(self.image_paths)
