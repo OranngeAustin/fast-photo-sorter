@@ -46,6 +46,11 @@ def _bounded_preview_size(width, height, max_pixels):
     return max(1, int(width * scale)), max(1, int(height * scale))
 
 
+_EXIF_ORIENTATION_TAG = 0x0112
+# EXIF orientations whose upright image swaps width and height.
+_TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
+
+
 def _decode_preview_in_subprocess(
     result_connection,
     path,
@@ -66,9 +71,10 @@ def _decode_preview_in_subprocess(
 
             source_pixels = pil_img.width * pil_img.height
             metadata["resolution"] = f"{pil_img.width} x {pil_img.height}"
+            is_draft_format = (pil_img.format or "").upper() in draft_formats
             preview_allowed = True
             if source_pixels > max_source_pixels:
-                if (pil_img.format or "").upper() in draft_formats:
+                if is_draft_format:
                     pil_img.draft(
                         "RGB",
                         (max(1, target_width), max(1, target_height)),
@@ -79,15 +85,22 @@ def _decode_preview_in_subprocess(
                     preview_allowed = False
 
             if preview_allowed:
-                preview_image = ImageOps.exif_transpose(pil_img)
-                preview_image.thumbnail(
-                    _bounded_preview_size(
-                        target_width,
-                        target_height,
-                        max_transfer_pixels,
-                    ),
-                    Image.Resampling.LANCZOS,
+                box = _bounded_preview_size(
+                    target_width,
+                    target_height,
+                    max_transfer_pixels,
                 )
+                if exif.get(_EXIF_ORIENTATION_TAG) in _TRANSPOSED_ORIENTATIONS:
+                    box = box[::-1]
+                # Shrink before rotating upright so the full-size image is never
+                # copied; for JPEG this also lets the decoder scale in the DCT
+                # domain (draft) down to no less than the final preview size.
+                pil_img.thumbnail(
+                    box,
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=1.0 if is_draft_format else None,
+                )
+                preview_image = ImageOps.exif_transpose(pil_img)
                 rgba_image = preview_image.convert("RGBA")
                 result = (
                     "ok",
