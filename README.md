@@ -39,7 +39,7 @@
 - 扫描范围是所选目录及其子目录，排序规则为“修改时间从旧到新”；同一时间的文件再按规范化路径稳定排序。
 - 只扫描照片格式：JPEG / MPO、PNG、WebP、GIF、BMP、TIFF、AVIF、JPEG 2000，以及 HEIC/HEIF（需要 Pillow 插件在运行时注册，例如 pillow-heif 的 `register_heif_opener()`；当前程序不会自动注册）。PDF、EPS/PS、PSD、ICO 等格式即使 Pillow 认识扩展名也不会出现，避免把文档误当成“坏图”删掉。
 - 扫描时自动跳过回收站、快照和缩略图缓存目录：`$RECYCLE.BIN`、`System Volume Information`、`#recycle`、`#snapshot`、`@eaDir`、`@Recycle`、`@Recently-Snapshot`、`@__thumb`，以及所有以 `.` 或 `$` 开头的目录；带 Windows 隐藏 / 系统属性的目录和文件、以 `.` 开头的文件（如 macOS 的 `._IMG_0001.jpg`）也会跳过。所选的根目录本身不受这些规则限制。
-- 进度保存在所选照片目录的 `.sorter_progress.json`，上次目录保存在项目目录的 `config.json`。进度文件记录“进行中 / 已完成”状态，因此全部筛选完后不会意外从头开始。
+- 进度保存在所选照片目录的 `.sorter_progress.json`，上次目录保存在项目目录的 `config.json`。进度文件记录“进行中 / 已完成”状态，因此全部筛选完后不会意外从头开始。进度文件先写临时文件再整体替换，写到一半中断也不会损坏原有进度；扫描出错且没有找到图片时，也会保留原有进度。
 - 预览加载失败或图片过大时，程序不会把异常当作删除成功；会显示错误信息，同时保留文件名和进度信息，删除前可以确认是哪一个文件。
 
 ## 技术亮点
@@ -71,4 +71,4 @@ $env:QT_QPA_PLATFORM='offscreen'
 D:\anaconda3\envs\py312-clean\python.exe -X utf8 -B -m unittest -v test.py
 ```
 
-当前测试套件共 33 项。
+当前测试套件共 38 项。
