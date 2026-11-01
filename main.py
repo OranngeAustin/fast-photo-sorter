@@ -46,6 +46,11 @@ def _bounded_preview_size(width, height, max_pixels):
     return max(1, int(width * scale)), max(1, int(height * scale))
 
 
+_EXIF_ORIENTATION_TAG = 0x0112
+# EXIF orientations whose upright image swaps width and height.
+_TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
+
+
 def _decode_preview_in_subprocess(
     result_connection,
     path,
@@ -66,9 +71,10 @@ def _decode_preview_in_subprocess(
 
             source_pixels = pil_img.width * pil_img.height
             metadata["resolution"] = f"{pil_img.width} x {pil_img.height}"
+            is_draft_format = (pil_img.format or "").upper() in draft_formats
             preview_allowed = True
             if source_pixels > max_source_pixels:
-                if (pil_img.format or "").upper() in draft_formats:
+                if is_draft_format:
                     pil_img.draft(
                         "RGB",
                         (max(1, target_width), max(1, target_height)),
@@ -79,15 +85,22 @@ def _decode_preview_in_subprocess(
                     preview_allowed = False
 
             if preview_allowed:
-                preview_image = ImageOps.exif_transpose(pil_img)
-                preview_image.thumbnail(
-                    _bounded_preview_size(
-                        target_width,
-                        target_height,
-                        max_transfer_pixels,
-                    ),
-                    Image.Resampling.LANCZOS,
+                box = _bounded_preview_size(
+                    target_width,
+                    target_height,
+                    max_transfer_pixels,
                 )
+                if exif.get(_EXIF_ORIENTATION_TAG) in _TRANSPOSED_ORIENTATIONS:
+                    box = box[::-1]
+                # Shrink before rotating upright so the full-size image is never
+                # copied; for JPEG this also lets the decoder scale in the DCT
+                # domain (draft) down to no less than the final preview size.
+                pil_img.thumbnail(
+                    box,
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=1.0 if is_draft_format else None,
+                )
+                preview_image = ImageOps.exif_transpose(pil_img)
                 rgba_image = preview_image.convert("RGBA")
                 result = (
                     "ok",
@@ -738,6 +751,7 @@ class FastPhotoSorter(QMainWindow):
         self.deleted_indices = set()
         self.pending_deletions = {}
         self.last_action = None
+        self._saved_progress = None
         self.session_id = 0
         self._scanners = set()
         self._closing = False
@@ -844,6 +858,7 @@ class FastPhotoSorter(QMainWindow):
         self.path_sort_keys = {}
         self.cache.clear()
         self.deleted_indices.clear()
+        self._saved_progress = None
         self.loader.begin_session(self.session_id)
 
     def load_directory(self, directory):
@@ -898,6 +913,7 @@ class FastPhotoSorter(QMainWindow):
         return os.path.join(self.current_directory, ".sorter_progress.json")
 
     def _clear_progress(self):
+        self._saved_progress = None
         progress_file = self._progress_path()
         try:
             if os.path.isfile(progress_file):
@@ -1002,11 +1018,19 @@ class FastPhotoSorter(QMainWindow):
                     ),
                 }
 
+        progress_file = self._progress_path()
+        # Each navigation reaches here twice (the action, then request_cache);
+        # skip rewriting a checkpoint that is already on disk.
+        if getattr(self, "_saved_progress", None) == (progress_file, data):
+            return
         try:
-            with open(self._progress_path(), "w", encoding="utf-8") as progress_handle:
+            with open(progress_file, "w", encoding="utf-8") as progress_handle:
                 json.dump(data, progress_handle, ensure_ascii=False)
         except Exception as exc:
+            self._saved_progress = None
             print(f"Failed to save progress: {exc}")
+        else:
+            self._saved_progress = (progress_file, data)
 
     def _has_current_image(self):
         return 0 <= self.current_index < len(self.image_paths)
