@@ -981,6 +981,42 @@ class FastPhotoSorterTests(unittest.TestCase):
             Image.new("RGB", (40, 30), (1, 2, 3)).save(plain)
             self.assertEqual(decode(plain)["date"], "未知")
 
+    def test_zoom_supports_modes_imageqt_cannot_wrap(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            sources = {
+                "cmyk.jpg": Image.new("CMYK", (300, 200), (0, 255, 255, 0)),
+                "gray-alpha.png": Image.new("LA", (300, 200), (128, 255)),
+                "int32.tif": Image.new("I", (300, 200), 100),
+            }
+            thumbnail = QImage(150, 100, QImage.Format.Format_ARGB32)
+            thumbnail.fill(0)
+            view = main.ZoomableView()
+            view.resize(400, 300)
+            view.show()
+            self.app.processEvents()
+            warnings = []
+            view.zoom_warning.connect(warnings.append)
+            try:
+                for name, image in sources.items():
+                    path = root / name
+                    image.save(path)
+                    view.setPixmap(QPixmap.fromImage(thumbnail), str(path))
+                    view.set_zoom(True)
+                    self.assertTrue(view.is_zoomed, name)
+                    self.assertEqual(view.pixmap_item.pixmap().width(), 300, name)
+                    view.set_zoom(False)
+                self.assertEqual(warnings, [])
+
+                # The CMYK pixel (C=0, M=Y=255) must come out red, as the preview shows it.
+                view.setPixmap(QPixmap.fromImage(thumbnail), str(root / "cmyk.jpg"))
+                view.set_zoom(True)
+                color = view.pixmap_item.pixmap().toImage().pixelColor(150, 100)
+                self.assertGreater(color.red(), 200)
+                self.assertLess(max(color.green(), color.blue()), 60)
+            finally:
+                view.close()
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -619,6 +619,8 @@ class ZoomableView(QGraphicsView):
 
     zoom_warning = pyqtSignal(str)
     MAX_FULL_ZOOM_PIXELS = 24_000_000
+    # Modes ImageQt can wrap directly; CMYK, LA, I, F and others cannot.
+    _IMAGEQT_MODES = frozenset({"1", "L", "P", "RGB", "RGBA", "I;16"})
 
     def __init__(self):
         super().__init__()
@@ -693,6 +695,9 @@ class ZoomableView(QGraphicsView):
                         return
 
                     pil_img = ImageOps.exif_transpose(pil_img)
+                    if pil_img.mode not in self._IMAGEQT_MODES:
+                        # Same conversion the preview uses, so 1:1 matches it.
+                        pil_img = pil_img.convert("RGBA")
                     self.full_pixmap = QPixmap.fromImage(ImageQt(pil_img).copy())
                     self.pixmap_item.setPixmap(self.full_pixmap)
                     self._update_scene_rect()
