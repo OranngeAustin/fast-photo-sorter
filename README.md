@@ -72,4 +72,4 @@ $env:QT_QPA_PLATFORM='offscreen'
 D:\anaconda3\envs\py312-clean\python.exe -X utf8 -B -m unittest -v test.py
 ```
 
-当前测试套件共 39 项。
+当前测试套件共 43 项。
