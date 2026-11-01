@@ -859,6 +859,42 @@ class FastPhotoSorterTests(unittest.TestCase):
             self.assertEqual(data["status"], "in_progress")
             self.assertEqual(data["last_path"], image_path)
 
+    def test_keys_are_ignored_once_shutdown_has_begun(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+            def select_directory(self):
+                calls.append("select_directory")
+
+        calls = []
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "shown.jpg")
+            window.image_paths = [path, os.path.join("photos", "next.jpg")]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.cache[0] = (
+                QPixmap(),
+                {"size_mb": 0.1, "resolution": "未知", "date": "未知", "error": "图片加载失败"},
+                path,
+            )
+            window.update_view()
+            window._begin_shutdown()
+
+            for key in (Qt.Key.Key_W, Qt.Key.Key_D, Qt.Key.Key_O):
+                window.keyPressEvent(Event(key))
+
+            self.assertEqual(window.pending_deletions, {})
+            self.assertEqual(window.current_index, 0)
+            self.assertEqual(calls, [])
+        finally:
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

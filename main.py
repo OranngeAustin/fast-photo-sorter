@@ -1146,7 +1146,9 @@ class FastPhotoSorter(QMainWindow):
         self.update_osd_position()
 
     def keyPressEvent(self, event):
-        if event.isAutoRepeat():
+        # Once shutdown has begun (pending deletions already cancelled), no key
+        # may queue a new deletion, move on or start a new scan.
+        if event.isAutoRepeat() or getattr(self, "_closing", False):
             return
 
         key = event.key()
