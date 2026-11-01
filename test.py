@@ -944,6 +944,43 @@ class FastPhotoSorterTests(unittest.TestCase):
             self.assertIn("未找到任何图片文件", dummy.image_label.text)
             self.assertIn(warning, dummy.image_label.text)
 
+    def test_preview_reads_capture_date_from_exif_sub_ifd(self):
+        class Sink:
+            value = None
+
+            def send(self, value):
+                self.value = value
+
+            def close(self):
+                pass
+
+        def decode(path):
+            sink = Sink()
+            main._decode_preview_in_subprocess(
+                sink, str(path), 64, 64, 36867, 24_000_000, ("JPEG", "MPO"), 6_000_000
+            )
+            self.assertEqual(sink.value[0], "ok", sink.value)
+            return sink.value[1]
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            camera = root / "camera.jpg"
+            exif = Image.Exif()
+            exif[0x0132] = "2024:01:01 00:00:00"  # IFD0 DateTime (last edit)
+            exif.get_ifd(0x8769)[36867] = "2021:05:06 07:08:09"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(camera, exif=exif.tobytes())
+            self.assertEqual(decode(camera)["date"], "2021:05:06 07:08:09")
+
+            legacy = root / "legacy.jpg"
+            exif = Image.Exif()
+            exif[36867] = "2019:02:03 04:05:06"  # misplaced in IFD0 by some writers
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(legacy, exif=exif.tobytes())
+            self.assertEqual(decode(legacy)["date"], "2019:02:03 04:05:06")
+
+            plain = root / "plain.png"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(plain)
+            self.assertEqual(decode(plain)["date"], "未知")
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

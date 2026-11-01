@@ -35,6 +35,20 @@ from PyQt6.QtWidgets import (
 from send2trash import send2trash
 
 
+def _exif_capture_date(exif, tag):
+    """Cameras store DateTimeOriginal in the Exif sub-IFD; a few writers put it in IFD0."""
+    if not exif or tag is None:
+        return None
+    try:
+        value = exif.get_ifd(ExifTags.IFD.Exif).get(tag)
+    except Exception:
+        # A malformed sub-IFD must not cost the preview itself.
+        value = None
+    if value is None:
+        value = exif.get(tag)
+    return None if value is None else str(value)
+
+
 def _bounded_preview_size(width, height, max_pixels):
     """Bound preview pixels so a pipe transfer cannot grow without limit."""
     width = max(1, int(width))
@@ -61,8 +75,9 @@ def _decode_preview_in_subprocess(
         metadata = {"resolution": "未知", "date": "未知"}
         with Image.open(path) as pil_img:
             exif = pil_img.getexif()
-            if exif and exif_datetime_tag is not None and exif_datetime_tag in exif:
-                metadata["date"] = str(exif[exif_datetime_tag])
+            capture_date = _exif_capture_date(exif, exif_datetime_tag)
+            if capture_date is not None:
+                metadata["date"] = capture_date
 
             source_pixels = pil_img.width * pil_img.height
             metadata["resolution"] = f"{pil_img.width} x {pil_img.height}"
