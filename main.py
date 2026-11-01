@@ -1094,12 +1094,13 @@ class FastPhotoSorter(QMainWindow):
         self.update_osd_position()
 
     def request_cache(self):
+        # The loader decodes in request order: the photo on screen first, then
+        # the ones ahead, and the previous photo (only needed for undo) last.
         needed_indices = list(
-            range(
-                max(0, self.current_index - 1),
-                min(len(self.image_paths), self.current_index + 4),
-            )
+            range(self.current_index, min(len(self.image_paths), self.current_index + 4))
         )
+        if self.current_index > 0:
+            needed_indices.append(self.current_index - 1)
 
         for index in list(self.cache):
             if index not in needed_indices:
