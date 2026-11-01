@@ -12,7 +12,7 @@
 | 3 | 安全审计 → `02-findings.md`「安全」一节 | ✅ 完成 | 无高危或中危；新增 L11–L15、Q5；`pip-audit` 未发现已知漏洞 |
 | 4 | 修复高危问题（`claude/review-fixes` → PR 到 main） | ✅ 完成 | H1 已修复并加回归测试；33 项测试 32 通过、0 失败、1 跳过；PR [OranngeAustin/fast-photo-sorter#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2) |
 | 5 | 性能分析 → `03-perf-plan.md` | ✅ 完成 | 基准脚本在 `bench/`；7 个热点；入选 P1 JPEG draft、P2 进度写入去重、P3 预加载优先级 |
-| 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | 🚧 进行中 | 6.1 P1 ✅ [#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3)：解码 −48.6%，峰值内存 −22% · 6.2 P2 🚧 · 6.3 P3 ⬜ |
+| 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | 🚧 进行中 | 6.1 P1 ✅ [#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3)：解码 −48.6%，峰值内存 −22% · 6.2 P2 ✅ [#4](https://github.com/OranngeAustin/fast-photo-sorter/pull/4)：写入次数 −50%，按键耗时 −46% · 6.3 P3 🚧 |
 | 7 | 总结 → `00-SUMMARY.md` | ⬜ 未开始 | |
 
 ## 基线（阶段 0）
@@ -46,3 +46,4 @@
 - 阶段 4：先写 H1 回归测试，确认它在修复前失败；修复后全部测试通过；推送并创建 PR #2（目标 main，未合并）。
 - 阶段 5：新增 `bench/`（preview、scan、progress、memory），测得基线并写出 `03-perf-plan.md`。
 - 阶段 6.1（P1）：`claude/perf-jpeg-draft`，先提交特征测试，再提交优化；第 1 种方案即达标；PR #3 → `claude/review-fixes`（未合并）。
+- 阶段 6.2（P2）：`claude/perf-progress-writes`，先提交特征测试，再提交优化；第 1 种方案即达标；PR #4 → `claude/review-fixes`（未合并）。
