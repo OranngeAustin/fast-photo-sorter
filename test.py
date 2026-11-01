@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps, ImageStat
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication
@@ -1009,6 +1009,123 @@ class FastPhotoSorterTests(unittest.TestCase):
                 self.app.processEvents()
                 QTest.qWait(10)
             window.close()
+
+
+
+class _PipeSink:
+    def __init__(self):
+        self.value = None
+
+    def send(self, value):
+        self.value = value
+
+    def close(self):
+        pass
+
+
+def _reference_preview(path, box):
+    """The preview contract: EXIF-upright, fitted into ``box`` with LANCZOS."""
+    with Image.open(path) as source:
+        upright = ImageOps.exif_transpose(source)
+        upright.thumbnail(box, Image.Resampling.LANCZOS)
+        return upright.convert("RGBA")
+
+
+class PreviewDecodeCharacterizationTests(unittest.TestCase):
+    """Pin the observable output of the preview decoder (sizes, orientation,
+    metadata and pixels) so decoder optimizations cannot silently change it."""
+
+    MAX_MEAN_ABS_DIFF = 6.0  # per channel, 0..255: visually indistinguishable
+
+    def decode(self, path, target, max_source=24_000_000, max_transfer=6_000_000):
+        sink = _PipeSink()
+        main._decode_preview_in_subprocess(
+            sink,
+            str(path),
+            target[0],
+            target[1],
+            36867,
+            max_source,
+            ("JPEG", "MPO"),
+            max_transfer,
+        )
+        self.assertEqual(sink.value[0], "ok", sink.value)
+        _, metadata, width, height, pixels = sink.value
+        self.assertEqual(len(pixels), width * height * 4)
+        return metadata, Image.frombytes("RGBA", (width, height), pixels)
+
+    @staticmethod
+    def photo(size):
+        """Smooth gradients plus mild noise, like a real photo."""
+        gradient = Image.linear_gradient("L").resize(size)
+        noise = Image.effect_noise(size, 12)
+        return Image.merge(
+            "RGB",
+            (gradient, Image.blend(gradient.transpose(Image.Transpose.ROTATE_90).resize(size), noise, 0.3), noise),
+        )
+
+    def assert_close(self, actual, expected):
+        self.assertEqual(actual.size, expected.size)
+        stat = ImageStat.Stat(ImageChops.difference(actual, expected).convert("RGB"))
+        for channel_mean in stat.mean:
+            self.assertLessEqual(channel_mean, self.MAX_MEAN_ABS_DIFF)
+
+    def test_landscape_jpeg_is_fitted_into_target(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "landscape.jpg"
+            self.photo((2000, 1500)).save(path, quality=92)
+            metadata, preview = self.decode(path, (800, 500))
+            self.assertEqual(metadata["resolution"], "2000 x 1500")
+            self.assertEqual(preview.size, (667, 500))
+            self.assert_close(preview, _reference_preview(path, (800, 500)))
+
+    def test_rotated_jpeg_is_upright_and_fitted(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "portrait.jpg"
+            image = self.photo((1600, 1200))
+            image.paste((255, 0, 0), (0, 0, 400, 300))  # marker in the stored top-left
+            exif = Image.Exif()
+            exif[0x0112] = 6  # rotate 90 degrees clockwise when displayed
+            image.save(path, quality=92, exif=exif.tobytes())
+            metadata, preview = self.decode(path, (800, 600))
+            self.assertEqual(metadata["resolution"], "1600 x 1200")
+            self.assertEqual(preview.size, (450, 600))
+            red, green, blue, _ = preview.getpixel((preview.width - 20, 20))
+            self.assertGreater(red, 200)
+            self.assertLess(max(green, blue), 60)
+            self.assert_close(preview, _reference_preview(path, (800, 600)))
+
+    def test_png_preview_is_pixel_exact(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "screenshot.png"
+            self.photo((1200, 900)).save(path)
+            _, preview = self.decode(path, (640, 400))
+            self.assertEqual(preview.size, (533, 400))
+            self.assertEqual(preview.tobytes(), _reference_preview(path, (640, 400)).tobytes())
+
+    def test_small_image_is_not_enlarged(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "small.jpg"
+            self.photo((120, 80)).save(path)
+            metadata, preview = self.decode(path, (1920, 1080))
+            self.assertEqual(metadata["resolution"], "120 x 80")
+            self.assertEqual(preview.size, (120, 80))
+
+    def test_transfer_pixel_bound_limits_preview_size(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "bounded.png"
+            self.photo((400, 300)).save(path)
+            _, preview = self.decode(path, (1920, 1080), max_transfer=10_000)
+            self.assertEqual(preview.size, (100, 75))
+
+    def test_oversized_jpeg_uses_draft_within_source_limit(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "huge.jpg"
+            self.photo((1600, 1200)).save(path, quality=92)
+            metadata, preview = self.decode(path, (400, 300), max_source=1_000_000)
+            self.assertEqual(metadata["resolution"], "1600 x 1200")
+            self.assertNotIn("error", metadata)
+            self.assertEqual(preview.size, (400, 300))
 
 
 if __name__ == "__main__":
