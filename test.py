@@ -1011,5 +1011,65 @@ class FastPhotoSorterTests(unittest.TestCase):
             window.close()
 
 
+class PreloadWindowCharacterizationTests(unittest.TestCase):
+    """Pin which previews request_cache asks for and which it evicts."""
+
+    class Window:
+        def __init__(self, count, current_index, cached=()):
+            self.image_paths = [f"IMG_{index}.jpg" for index in range(count)]
+            self.current_index = current_index
+            self.session_id = 3
+            self.cache = {
+                index: (None, {}, self.image_paths[index]) for index in cached
+            }
+            self.requests = []
+            self.saves = 0
+            outer = self
+
+            class Loader:
+                def update_window(self, session_id, requests):
+                    outer.requests.append((session_id, list(requests)))
+
+            self.loader = Loader()
+
+        def save_progress(self):
+            self.saves += 1
+
+    def run_window(self, count, current_index, cached=()):
+        window = self.Window(count, current_index, cached)
+        main.FastPhotoSorter.request_cache(window)
+        self.assertEqual(len(window.requests), 1)
+        session_id, requests = window.requests[0]
+        self.assertEqual(session_id, 3)
+        for index, path in requests:
+            self.assertEqual(path, window.image_paths[index])
+        self.assertEqual(window.saves, 1)
+        return window, sorted(index for index, _ in requests)
+
+    def test_window_is_previous_one_and_next_three(self):
+        window, requested = self.run_window(10, 5)
+        self.assertEqual(requested, [4, 5, 6, 7, 8])
+        self.assertEqual(window.cache, {})
+
+    def test_cached_entries_are_kept_and_not_requested_again(self):
+        window, requested = self.run_window(10, 5, cached=(0, 4, 7, 9))
+        self.assertEqual(requested, [5, 6, 8])
+        self.assertEqual(sorted(window.cache), [4, 7])
+
+    def test_window_is_clipped_at_both_ends(self):
+        _, requested = self.run_window(10, 0)
+        self.assertEqual(requested, [0, 1, 2, 3])
+        _, requested = self.run_window(10, 9)
+        self.assertEqual(requested, [8, 9])
+        _, requested = self.run_window(1, 0)
+        self.assertEqual(requested, [0])
+
+    def test_stale_cache_entry_for_other_path_is_requested(self):
+        window = self.Window(10, 5, cached=(5,))
+        window.cache[5] = (None, {}, "moved.jpg")
+        main.FastPhotoSorter.request_cache(window)
+        self.assertIn((5, "IMG_5.jpg"), window.requests[0][1])
+
+
 if __name__ == "__main__":
     unittest.main()
