@@ -3,6 +3,7 @@
 > 范围：`claude/review-fixes` @ d116f15 的全部代码。阶段 2 使用 `/code-review`（high，对象为 `main.py`），并按 `01-architecture.md` 的顺序人工复核；阶段 3 的安全审计结果在文末「安全」一节，编号接续。
 > 「把握程度」：**高** = 读代码确定，或已用实验复现；**中** = 推理充分但依赖时序或环境；**低** = 需要 Windows 或真实 NAS 环境确认。
 > 行号以 d116f15 的 `main.py` 为准。
+> **修复状态**：H1 → [#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2)；M1、M2、M3、M4、M6 → [#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)（均为 PR，尚未合并）。其余项未处理。
 
 ## 高
 
@@ -14,12 +15,12 @@
 
 | 编号 | 位置 | 问题 | 原因 | 修复建议 | 把握 |
 | --- | --- | --- | --- | --- | --- |
-| M1 | `main.py:1141`（`keyPressEvent`） | 退出流程开始后（`_closing=True`，界面显示「正在停止后台任务」）仍响应 W/D/O 等按键。 | `keyPressEvent` 没有检查 `_closing`。如果关闭需要等待（例如扫描慢速 NAS，最长要等 5 秒以上），此时按 W 会在 `_cancel_pending_deletions` 之后新建一个 3 秒删除计时器，文件会在用户请求退出之后被删除，违背 README「退出时安全取消未到期的删除」。按 O 还会在关闭期间启动新扫描、改写 `config.json`。 | `keyPressEvent` 开头加上：`_closing` 为真时直接返回。同时在 `action_delete` 中加同样的保护（双保险）。 | 高 |
-| M2 | `main.py:885-887`（`on_scan_finished`） | 扫描失败或只扫到部分目录、结果为空时，会**删除进度文件**。 | 只要结果列表为空就调用 `_clear_progress()`，没有区分「确实没有照片」和「扫描出错」（子进程崩溃、子目录无权限、SMB 短暂断开）。照片都放在子目录里时，一次瞬时错误就会让进度归零。 | 只在 `warning` 为空（扫描完整成功）时清除进度；有警告时保留进度文件，并在界面上显示警告。 | 高 |
-| M3 | `main.py:63-65`（`_decode_preview_in_subprocess`） | 「拍摄时间」几乎总是读不到 EXIF，而是退回显示文件创建时间（`birthTime`）。 | `DateTimeOriginal`（36867）存放在 Exif 子 IFD（0x8769）中，而代码只查 `getexif()` 的 IFD0。已用 Pillow 13 实验确认：`36867 in getexif()` 为 False，`getexif().get_ifd(0x8769)[36867]` 能读到。拷贝过的文件创建时间等于拷贝时间，标签具有误导性。 | 先查 `exif.get_ifd(ExifTags.IFD.Exif)`，再退回 IFD0 和 `DateTime`（306）。 | 高 |
-| M4 | `main.py:680-681`（`ZoomableView.set_zoom`） | CMYK JPEG、带 alpha 的灰度 PNG（LA）、32 位整型/浮点 TIFF（I/F）**永远无法放大**，只会提示「原图加载失败」。 | `ImageQt` 不支持这些模式（已实验确认会抛 `ValueError: unsupported image mode`）。预览路径先 `convert("RGBA")` 所以正常，放大路径没有转换。 | 放大前，模式不在 ImageQt 支持列表中时先 `convert("RGBA")`（或统一转 RGBA）。 | 高 |
+| M1（✅ 已修复：[#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)） | `main.py:1141`（`keyPressEvent`） | 退出流程开始后（`_closing=True`，界面显示「正在停止后台任务」）仍响应 W/D/O 等按键。 | `keyPressEvent` 没有检查 `_closing`。如果关闭需要等待（例如扫描慢速 NAS，最长要等 5 秒以上），此时按 W 会在 `_cancel_pending_deletions` 之后新建一个 3 秒删除计时器，文件会在用户请求退出之后被删除，违背 README「退出时安全取消未到期的删除」。按 O 还会在关闭期间启动新扫描、改写 `config.json`。 | `keyPressEvent` 开头加上：`_closing` 为真时直接返回。同时在 `action_delete` 中加同样的保护（双保险）。 | 高 |
+| M2（✅ 已修复：[#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)） | `main.py:885-887`（`on_scan_finished`） | 扫描失败或只扫到部分目录、结果为空时，会**删除进度文件**。 | 只要结果列表为空就调用 `_clear_progress()`，没有区分「确实没有照片」和「扫描出错」（子进程崩溃、子目录无权限、SMB 短暂断开）。照片都放在子目录里时，一次瞬时错误就会让进度归零。 | 只在 `warning` 为空（扫描完整成功）时清除进度；有警告时保留进度文件，并在界面上显示警告。 | 高 |
+| M3（✅ 已修复：[#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)） | `main.py:63-65`（`_decode_preview_in_subprocess`） | 「拍摄时间」几乎总是读不到 EXIF，而是退回显示文件创建时间（`birthTime`）。 | `DateTimeOriginal`（36867）存放在 Exif 子 IFD（0x8769）中，而代码只查 `getexif()` 的 IFD0。已用 Pillow 13 实验确认：`36867 in getexif()` 为 False，`getexif().get_ifd(0x8769)[36867]` 能读到。拷贝过的文件创建时间等于拷贝时间，标签具有误导性。 | 先查 `exif.get_ifd(ExifTags.IFD.Exif)`，再退回 IFD0 和 `DateTime`（306）。 | 高 |
+| M4（✅ 已修复：[#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)） | `main.py:680-681`（`ZoomableView.set_zoom`） | CMYK JPEG、带 alpha 的灰度 PNG（LA）、32 位整型/浮点 TIFF（I/F）**永远无法放大**，只会提示「原图加载失败」。 | `ImageQt` 不支持这些模式（已实验确认会抛 `ValueError: unsupported image mode`）。预览路径先 `convert("RGBA")` 所以正常，放大路径没有转换。 | 放大前，模式不在 ImageQt 支持列表中时先 `convert("RGBA")`（或统一转 RGBA）。 | 高 |
 | M5 | `main.py:1217`（`execute_delete`） | 文件「不存在」被当作删除成功。网络共享短暂不可达时，`os.path.exists` 返回 False，索引被记为已删除，进度越过它，但文件实际还在。下次启动按排序键恢复时会跳过它，这张照片既没删掉也不会再出现。 | `os.path.exists` 遇到任何 `OSError` 都返回 False，无法区分「已被外部删除」和「暂时访问不到」。 | 区分两种情况：用 `os.stat`/`os.lstat` 捕获 `FileNotFoundError` 才算「已不存在」；其他 `OSError` 按删除失败处理（回到该图并提示）。 | 中 |
-| M6 | `main.py:1005-1009`（`save_progress`） | 进度文件以截断方式原地写入，每次按键都会写。 | `open(..., "w")` + `json.dump` 不是原子操作。崩溃、断电或磁盘满时会留下空或截断的 JSON，`load_progress` 解析失败后从第 0 张开始，「已完成」状态也会丢失。 | 先写同目录临时文件（以点开头，扫描器会自动跳过），再 `os.replace` 原子替换。 | 高 |
+| M6（✅ 已修复：[#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)） | `main.py:1005-1009`（`save_progress`） | 进度文件以截断方式原地写入，每次按键都会写。 | `open(..., "w")` + `json.dump` 不是原子操作。崩溃、断电或磁盘满时会留下空或截断的 JSON，`load_progress` 解析失败后从第 0 张开始，「已完成」状态也会丢失。 | 先写同目录临时文件（以点开头，扫描器会自动跳过），再 `os.replace` 原子替换。 | 高 |
 | M7 | `main.py:918-920`（`load_progress`）、`main.py:967-973`（`save_progress`） | 一个文件夹标记为「已完成」后，再往里加的新照片**永远不会显示**。 | `completed` 状态不保存最后的排序键，加载时直接跳到 `len(image_paths)`。新照片 mtime 更晚，本应排在末尾等待筛选。 | 「已完成」时也记录最后一项的 `last_sort_key`，加载时定位到它之后的第一项。这会改变进度文件语义，见「待人工确认」Q2。 | 高（行为）/ 需确认（是否属于设计取舍） |
 | M8 | `main.py:671-683`（`set_zoom`） | 按住空格或左键放大时，在 **GUI 线程**同步解码原图：Image.open → exif_transpose（完整解码 + 拷贝）→ ImageQt（转 RGBA）→ `QImage.copy` → `QPixmap`。24 MP 图片会卡住界面，峰值内存约 300 MB 以上，而且每次按下都重新解码。 | 放大路径没有做后台处理，也没有缓存。 | 短期：缓存当前路径的原图 QPixmap，或至少复用 RGBA 转换，减少中间拷贝。长期：放到后台线程，先显示「加载原图中」。 | 高 |
 

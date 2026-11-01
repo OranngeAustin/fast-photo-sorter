@@ -28,6 +28,7 @@
 | [OranngeAustin/fast-photo-sorter#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3) | `claude/perf-jpeg-draft` → `claude/review-fixes` | P1：预览先缩放再转正，JPEG 按 draft 尺寸解码 | 子进程解码 351 → 177 ms（**−48.6%**），单张往返 −36.6%，峰值 RSS 160 → 124 MB（−22%） | 39 项：38 通过、1 跳过 |
 | [OranngeAustin/fast-photo-sorter#4](https://github.com/OranngeAustin/fast-photo-sorter/pull/4) | `claude/perf-progress-writes` → `claude/review-fixes` | P2：进度检查点内容未变时不重复写入 | 每次按键写入次数 2 → 1（**−50%**），1000 次按键耗时约 −46% | 37 项：36 通过、1 跳过 |
 | [OranngeAustin/fast-photo-sorter#5](https://github.com/OranngeAustin/fast-photo-sorter/pull/5) | `claude/perf-load-priority` → `claude/review-fixes` | P3：预加载先解码当前照片 | 窗口为空时当前图到达 455 → 245 ms（**约 −46%**） | 37 项：36 通过、1 跳过 |
+| [OranngeAustin/fast-photo-sorter#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6) | `claude/fix-medium-issues` → `claude/review-fixes` | 审查后追加：修复中级问题 M1、M2、M3、M4、M6 | 每个问题一个提交，都附回归测试 | 38 项：37 通过、1 跳过；与 #3–#5 全部合入后 52 项：51 通过、1 跳过 |
 
 **main 的变化**：执行期间有人合并了 PR #1（新增 `CLAUDE.md` 和 `.claude/settings.json`，不是本流程合并的）。已确认 #2 与新 `main` 没有冲突，新 `CLAUDE.md` 也没有忽略目录清单。合并 #3–#5 后，记得把 `CLAUDE.md` 中「32 tests」更新为 47。
 
@@ -58,6 +59,6 @@
 
 1. **先验证 Q1**（10 分钟）：这关系到误删能否恢复，结果决定是否要给网络盘加删除警告。
 2. 审阅并合并 #3 → #4 → #5（解决上面说的两处文本冲突），再审阅并合并 #2 到 `main`。
-3. 开一个小 PR 修中级里低风险、高价值的几项：**M1**（关闭期间忽略按键，一行代码）、**M2**（扫描有警告时不删进度文件）、**M3**（EXIF 拍摄时间从 Exif 子 IFD 读取）、**M4**（放大前转 RGBA）、**M6**（进度原子写入）。这些都有明确的复现方式，修复范围很小。
+3. ~~开一个小 PR 修中级里低风险、高价值的几项：**M1**（关闭期间忽略按键，一行代码）、**M2**（扫描有警告时不删进度文件）、**M3**（EXIF 拍摄时间从 Exif 子 IFD 读取）、**M4**（放大前转 RGBA）、**M6**（进度原子写入）。这些都有明确的复现方式，修复范围很小。~~ 已完成：[OranngeAustin/fast-photo-sorter#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)。合并时 README 测试数改为 52；`save_progress` 与 #4 的冲突解决方法见 PR 描述。
 4. 再考虑 P4（常驻解码子进程）：这是剩下最大的性能收益（Windows 上每张预览可能省 0.3–1 秒），建议先在 Windows 上用 `bench/bench_preview.py` 量一下 spawn 开销。
 5. 给 `requirements.txt` 加上限或锁文件（L14）：本次安装已经拉到超出测试范围的 Pillow 13。
