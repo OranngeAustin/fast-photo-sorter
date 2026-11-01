@@ -9,7 +9,7 @@
 | 0 | 准备：安装依赖、跑测试基线、建分支、建本文件 | ✅ 完成 | 见下方「基线」 |
 | 1 | 架构摸底 → `01-architecture.md` | ✅ 完成 | 单文件应用；按风险排出 9 段审查顺序 |
 | 2 | 代码审查 → `02-findings.md` | ✅ 完成 | 用 `/code-review`（high）加人工复核：高 1 / 中 8 / 低 10 / 待人工确认 4 |
-| 3 | 安全审计 → `02-findings.md`「安全」一节 | 🚧 进行中 | |
+| 3 | 安全审计 → `02-findings.md`「安全」一节 | ✅ 完成 | 无高危或中危；新增 L11–L15、Q5；`pip-audit` 未发现已知漏洞 |
 | 4 | 修复高危问题（`claude/review-fixes` → PR 到 main） | ⬜ 未开始 | |
 | 5 | 性能分析 → `03-perf-plan.md` | ⬜ 未开始 | |
 | 6 | 算法优化（前 3 项，各自 `claude/perf-*` 分支 → PR 到 `claude/review-fixes`） | ⬜ 未开始 | |
@@ -39,3 +39,4 @@
 - 阶段 0：安装依赖并跑通基线；创建 `claude/review-fixes` 与本文件。
 - 阶段 1：读完全部代码，写出 `01-architecture.md`。用实验确认两处行为：EXIF `DateTimeOriginal` 位于 Exif 子 IFD，`getexif()` 顶层读不到；`ImageQt` 不支持 CMYK/LA/I/F 模式。
 - 阶段 2：`/code-review` 报告 10 条，人工复核补充到 19 条，另有 4 条待人工确认，写入 `02-findings.md`。只有 H1（加载中按 W 会删除未看到的照片）定为「高」且把握大。
+- 阶段 3：静态检查注入、鉴权、凭据、反序列化、路径；对全部 git 历史搜索凭据；`pip-audit` 未发现已知漏洞。追加 5 条低级别问题和 1 条待确认项。
