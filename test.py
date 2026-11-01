@@ -1011,5 +1011,118 @@ class FastPhotoSorterTests(unittest.TestCase):
             window.close()
 
 
+class ProgressPersistenceCharacterizationTests(unittest.TestCase):
+    """Pin what .sorter_progress.json holds after each user-visible step."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_window(self, directory, count=3):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        window.loader.update_window = lambda *_args: None
+        window.current_directory = directory
+        window.image_paths = [
+            os.path.join(directory, f"IMG_{index}.jpg") for index in range(count)
+        ]
+        window.path_mtimes = {
+            path: float(index) for index, path in enumerate(window.image_paths)
+        }
+        window.path_sort_keys = {
+            path: (mtime, os.path.normcase(path))
+            for path, mtime in window.path_mtimes.items()
+        }
+        window.current_index = 0
+        return window
+
+    def close_window(self, window):
+        window._begin_shutdown()
+        deadline = time.monotonic() + 2
+        while window._workers_are_running() and time.monotonic() < deadline:
+            self.app.processEvents()
+            QTest.qWait(10)
+        window.close()
+
+    @staticmethod
+    def read(directory):
+        with open(os.path.join(directory, ".sorter_progress.json"), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_keep_sequence_persists_each_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.update_view()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+                for index in (1, 2):
+                    window.action_keep()
+                    data = self.read(directory)
+                    self.assertEqual(data["status"], "in_progress")
+                    self.assertEqual(data["last_path"], window.image_paths[index])
+                    self.assertEqual(data["last_mtime"], float(index))
+                    self.assertEqual(
+                        data["last_sort_key"],
+                        [float(index), os.path.normcase(window.image_paths[index])],
+                    )
+                window.action_keep()
+                self.assertEqual(
+                    self.read(directory),
+                    {
+                        "status": "completed",
+                        "last_path": None,
+                        "last_mtime": None,
+                        "last_sort_key": None,
+                    },
+                )
+            finally:
+                self.close_window(window)
+
+    def test_progress_is_rewritten_after_clear(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.save_progress()
+                window._clear_progress()
+                self.assertFalse(os.path.exists(os.path.join(directory, ".sorter_progress.json")))
+                window.save_progress()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+    def test_failed_write_is_retried_with_same_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "later")
+            window = self.make_window(target)
+            try:
+                window.save_progress()  # directory missing: write fails
+                os.mkdir(target)
+                window.save_progress()
+                self.assertEqual(self.read(target)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+    def test_new_session_on_same_directory_rewrites_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.save_progress()
+                os.remove(os.path.join(directory, ".sorter_progress.json"))
+                window._begin_new_session(directory)
+                window.image_paths = [os.path.join(directory, "IMG_0.jpg")]
+                window.path_mtimes = {window.image_paths[0]: 0.0}
+                window.path_sort_keys = {
+                    window.image_paths[0]: (0.0, os.path.normcase(window.image_paths[0]))
+                }
+                window.current_index = 0
+                window.save_progress()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+
 if __name__ == "__main__":
     unittest.main()
