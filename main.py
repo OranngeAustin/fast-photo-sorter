@@ -1,8 +1,10 @@
 import json
 import multiprocessing
 import os
+import shutil
 import stat
 import sys
+import tempfile
 import threading
 import time
 from queue import Empty, Queue
@@ -614,6 +616,29 @@ class DirectoryScanner(QThread):
                 receive_connection.close()
 
 
+def _write_json_atomically(path, data):
+    """Write JSON so a crash or a full disk never leaves a truncated file behind."""
+    directory, name = os.path.split(path)
+    # Dot-prefixed, so the scanner never lists a leftover temporary file.
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f"{name}.", suffix=".tmp", dir=directory or None
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        try:
+            os.replace(temporary_path, path)
+        except PermissionError:
+            # Windows cannot replace a file another process (antivirus, a sync
+            # client) holds open; the new content is complete, so copy it over.
+            shutil.copyfile(temporary_path, path)
+    finally:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+
+
 class ZoomableView(QGraphicsView):
     """Image view with a bounded full-resolution zoom path."""
 
@@ -1030,8 +1055,7 @@ class FastPhotoSorter(QMainWindow):
                 }
 
         try:
-            with open(self._progress_path(), "w", encoding="utf-8") as progress_handle:
-                json.dump(data, progress_handle, ensure_ascii=False)
+            _write_json_atomically(self._progress_path(), data)
         except Exception as exc:
             print(f"Failed to save progress: {exc}")
 

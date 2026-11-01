@@ -1017,6 +1017,51 @@ class FastPhotoSorterTests(unittest.TestCase):
             finally:
                 view.close()
 
+    def test_progress_write_is_atomic(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            paths = [str(root / "first.jpg"), str(root / "second.jpg")]
+
+            class Dummy:
+                current_directory = str(root)
+                image_paths = paths
+                path_mtimes = {paths[0]: 1.0, paths[1]: 2.0}
+                path_sort_keys = {
+                    path: (mtime, os.path.normcase(path))
+                    for path, mtime in path_mtimes.items()
+                }
+                current_index = 0
+                deleted_indices = set()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+            dummy = Dummy()
+            main.FastPhotoSorter.save_progress(dummy)
+            original = progress_file.read_text(encoding="utf-8")
+            self.assertEqual(json.loads(original)["last_path"], paths[0])
+
+            # A write that dies half-way (disk full, crash) must leave the old file.
+            def interrupted_dump(data, handle, **_kwargs):
+                handle.write('{"status": "in_pro')
+                raise OSError("No space left on device")
+
+            dummy.current_index = 1
+            with patch.object(main.json, "dump", side_effect=interrupted_dump):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(progress_file.read_text(encoding="utf-8"), original)
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
+            # Windows refuses to replace a file another process holds open; the
+            # complete new checkpoint must still land.
+            with patch.object(main.os, "replace", side_effect=PermissionError("in use")):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(
+                json.loads(progress_file.read_text(encoding="utf-8"))["last_path"], paths[1]
+            )
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
