@@ -1,4 +1,4 @@
-"""Peak RSS of one preview decode, measured in a fresh process per variant."""
+"""Absolute peak RSS of a fresh process that imports main and decodes one preview."""
 import os
 import resource
 import subprocess
@@ -11,10 +11,9 @@ CHILD = r"""
 import os, resource, sys
 sys.path.insert(0, {here!r})
 import bench_preview as bp
-base = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 bp.decode_in_process({path!r})
 peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-print(f"{{(peak - base) / 1024:.1f}}")
+print(f"{{peak / 1024:.1f}}")
 """
 
 
@@ -35,7 +34,7 @@ def main_bench():
             ).stdout.strip().splitlines()[-1]
             values.append(float(output))
         values.sort()
-        print(f"decode peak RSS growth (MB): median={values[len(values) // 2]:.1f} all={values}")
+        print(f"process peak RSS incl. imports (MB): median={values[len(values) // 2]:.1f} all={values}")
 
 
 if __name__ == "__main__":
