@@ -53,3 +53,4 @@
 - 收尾复核：`origin/main` 在执行期间被他人更新（合并了 PR #1）；确认 PR #2 与新 main 没有冲突，新 `CLAUDE.md` 不影响已完成的工作。
 - 审查后追加（用户要求）：`claude/fix-medium-issues` 修复 M1、M2、M3、M4、M6，每项都先写回归测试并确认它在修复前失败；38 项测试 37 通过、0 失败、1 跳过；PR #6 → `claude/review-fixes`（未合并）。
 - 审查后追加（用户要求）：解决冲突并依次合并 #3 → #4 → #5 到 `claude/review-fixes`（#4、#5 合并前先把最新 base 合入各自分支，没有 force push）；合并后共 47 项测试，46 通过、0 失败、1 跳过；#2 与 main 无冲突，仍未合并。
+- 审查后追加（用户要求）：合并 #6 到 `claude/review-fixes`（与 base 无冲突；合并前在 head 上跑过测试，52 项中 51 通过、0 失败、1 跳过）。按要求不合并 #2 到 `main`。

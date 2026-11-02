@@ -3,7 +3,7 @@
 > 范围：`claude/review-fixes` @ d116f15 的全部代码。阶段 2 使用 `/code-review`（high，对象为 `main.py`），并按 `01-architecture.md` 的顺序人工复核；阶段 3 的安全审计结果在文末「安全」一节，编号接续。
 > 「把握程度」：**高** = 读代码确定，或已用实验复现；**中** = 推理充分但依赖时序或环境；**低** = 需要 Windows 或真实 NAS 环境确认。
 > 行号以 d116f15 的 `main.py` 为准。
-> **修复状态**：H1 → [#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2)；M1、M2、M3、M4、M6 → [#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)（均为 PR，尚未合并）。其余项未处理。
+> **修复状态**：H1 → [#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2)；M1、M2、M3、M4、M6 → [#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)（#6 已合并到 `claude/review-fixes`；#2 → `main` 尚未合并）。其余项未处理。
 
 ## 高
 
