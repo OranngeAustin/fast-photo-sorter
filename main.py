@@ -672,6 +672,11 @@ class ZoomableView(QGraphicsView):
         self.setStyleSheet("border: 0px;")
         self.setBackgroundBrush(QColor("black"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        # QGraphicsView takes focus by default (and on every click), and as a
+        # scroll area it then consumes the arrow keys, so the window never saw
+        # → ↑ ←. Without focus here, every key reaches FastPhotoSorter; drag
+        # panning while zoomed only needs the mouse.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.is_zoomed = False
         self.original_pixmap = None

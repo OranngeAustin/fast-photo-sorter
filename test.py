@@ -1062,6 +1062,45 @@ class FastPhotoSorterTests(unittest.TestCase):
             )
             self.assertEqual(os.listdir(root), [progress_file.name])
 
+    def test_arrow_keys_reach_window_even_after_clicking_image(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        calls = []
+        window.action_keep = lambda: calls.append("keep")
+        window.action_delete = lambda: calls.append("delete")
+        window.action_undo = lambda: calls.append("undo")
+        window._has_current_image = lambda: True
+        try:
+            window.show()
+            window.activateWindow()
+            self.assertTrue(QTest.qWaitForWindowActive(window))
+            arrows = (Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Left)
+
+            # Sent through the window, keys reach whatever widget Qt routes them
+            # to, exactly like real key presses.
+            for key in arrows:
+                QTest.keyClick(window.windowHandle(), key)
+            self.assertEqual(calls, ["keep", "delete", "undo"])
+
+            # Clicking the photo (left-button zoom) must not steal the arrows.
+            window.image_view.show()
+            QTest.mouseClick(
+                window.image_view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(10, 10)
+            )
+            for key in arrows:
+                QTest.keyClick(window.windowHandle(), key)
+            self.assertEqual(calls, ["keep", "delete", "undo"] * 2)
+        finally:
+            window._begin_shutdown()
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
