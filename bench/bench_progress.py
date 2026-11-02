@@ -50,14 +50,13 @@ def main_bench():
     with tempfile.TemporaryDirectory() as directory:
         window = Window(directory, 100_000)
         writes = [0]
-        real_open = open
+        real_write = main._write_json_atomically
 
-        def counting_open(path, mode="r", *args, **kwargs):
-            if "w" in mode and str(path).endswith(".sorter_progress.json"):
-                writes[0] += 1
-            return real_open(path, mode, *args, **kwargs)
+        def counting_write(path, data):
+            writes[0] += 1
+            return real_write(path, data)
 
-        with patch("builtins.open", counting_open):
+        with patch.object(main, "_write_json_atomically", counting_write):
             navigate(window, 10)
         print(f"progress-file writes for 10 keypresses (D): {writes[0]}")
         measure("1000 keypresses (D) incl. progress writes", lambda: navigate(window, 1000), runs)

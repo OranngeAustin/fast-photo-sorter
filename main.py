@@ -1,8 +1,10 @@
 import json
 import multiprocessing
 import os
+import shutil
 import stat
 import sys
+import tempfile
 import threading
 import time
 from queue import Empty, Queue
@@ -33,6 +35,20 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from send2trash import send2trash
+
+
+def _exif_capture_date(exif, tag):
+    """Cameras store DateTimeOriginal in the Exif sub-IFD; a few writers put it in IFD0."""
+    if not exif or tag is None:
+        return None
+    try:
+        value = exif.get_ifd(ExifTags.IFD.Exif).get(tag)
+    except Exception:
+        # A malformed sub-IFD must not cost the preview itself.
+        value = None
+    if value is None:
+        value = exif.get(tag)
+    return None if value is None else str(value)
 
 
 def _bounded_preview_size(width, height, max_pixels):
@@ -66,8 +82,9 @@ def _decode_preview_in_subprocess(
         metadata = {"resolution": "未知", "date": "未知"}
         with Image.open(path) as pil_img:
             exif = pil_img.getexif()
-            if exif and exif_datetime_tag is not None and exif_datetime_tag in exif:
-                metadata["date"] = str(exif[exif_datetime_tag])
+            capture_date = _exif_capture_date(exif, exif_datetime_tag)
+            if capture_date is not None:
+                metadata["date"] = capture_date
 
             source_pixels = pil_img.width * pil_img.height
             metadata["resolution"] = f"{pil_img.width} x {pil_img.height}"
@@ -612,11 +629,36 @@ class DirectoryScanner(QThread):
                 receive_connection.close()
 
 
+def _write_json_atomically(path, data):
+    """Write JSON so a crash or a full disk never leaves a truncated file behind."""
+    directory, name = os.path.split(path)
+    # Dot-prefixed, so the scanner never lists a leftover temporary file.
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f"{name}.", suffix=".tmp", dir=directory or None
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        try:
+            os.replace(temporary_path, path)
+        except PermissionError:
+            # Windows cannot replace a file another process (antivirus, a sync
+            # client) holds open; the new content is complete, so copy it over.
+            shutil.copyfile(temporary_path, path)
+    finally:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+
+
 class ZoomableView(QGraphicsView):
     """Image view with a bounded full-resolution zoom path."""
 
     zoom_warning = pyqtSignal(str)
     MAX_FULL_ZOOM_PIXELS = 24_000_000
+    # Modes ImageQt can wrap directly; CMYK, LA, I, F and others cannot.
+    _IMAGEQT_MODES = frozenset({"1", "L", "P", "RGB", "RGBA", "I;16"})
 
     def __init__(self):
         super().__init__()
@@ -691,6 +733,9 @@ class ZoomableView(QGraphicsView):
                         return
 
                     pil_img = ImageOps.exif_transpose(pil_img)
+                    if pil_img.mode not in self._IMAGEQT_MODES:
+                        # Same conversion the preview uses, so 1:1 matches it.
+                        pil_img = pil_img.convert("RGBA")
                     self.full_pixmap = QPixmap.fromImage(ImageQt(pil_img).copy())
                     self.pixmap_item.setPixmap(self.full_pixmap)
                     self._update_scene_rect()
@@ -899,8 +944,15 @@ class FastPhotoSorter(QMainWindow):
         }
         if not self.image_paths:
             self.current_index = -1
-            self._clear_progress()
-            self.image_label.setText("未找到任何图片文件")
+            message = "未找到任何图片文件"
+            if warning:
+                # An empty result from a scan that hit errors (crashed child,
+                # unreadable folders, a share dropping out) proves nothing about
+                # the folder, so the saved progress must survive it.
+                message += f"\n\n扫描未完整完成，已保留原有进度：\n{warning}"
+            else:
+                self._clear_progress()
+            self.image_label.setText(message)
             self.image_label.setStyleSheet("color: white; font-size: 24px;")
             self.image_label.show()
             self.image_view.hide()
@@ -1024,8 +1076,7 @@ class FastPhotoSorter(QMainWindow):
         if getattr(self, "_saved_progress", None) == (progress_file, data):
             return
         try:
-            with open(progress_file, "w", encoding="utf-8") as progress_handle:
-                json.dump(data, progress_handle, ensure_ascii=False)
+            _write_json_atomically(progress_file, data)
         except Exception as exc:
             self._saved_progress = None
             print(f"Failed to save progress: {exc}")
@@ -1171,7 +1222,9 @@ class FastPhotoSorter(QMainWindow):
         self.update_osd_position()
 
     def keyPressEvent(self, event):
-        if event.isAutoRepeat():
+        # Once shutdown has begun (pending deletions already cancelled), no key
+        # may queue a new deletion, move on or start a new scan.
+        if event.isAutoRepeat() or getattr(self, "_closing", False):
             return
 
         key = event.key()

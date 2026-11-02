@@ -859,6 +859,209 @@ class FastPhotoSorterTests(unittest.TestCase):
             self.assertEqual(data["status"], "in_progress")
             self.assertEqual(data["last_path"], image_path)
 
+    def test_keys_are_ignored_once_shutdown_has_begun(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+            def select_directory(self):
+                calls.append("select_directory")
+
+        calls = []
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "shown.jpg")
+            window.image_paths = [path, os.path.join("photos", "next.jpg")]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.cache[0] = (
+                QPixmap(),
+                {"size_mb": 0.1, "resolution": "未知", "date": "未知", "error": "图片加载失败"},
+                path,
+            )
+            window.update_view()
+            window._begin_shutdown()
+
+            for key in (Qt.Key.Key_W, Qt.Key.Key_D, Qt.Key.Key_O):
+                window.keyPressEvent(Event(key))
+
+            self.assertEqual(window.pending_deletions, {})
+            self.assertEqual(window.current_index, 0)
+            self.assertEqual(calls, [])
+        finally:
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
+    def test_incomplete_empty_scan_keeps_progress(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            saved = {"status": "in_progress", "last_path": str(root / "a" / "x.jpg")}
+            progress_file.write_text(json.dumps(saved), encoding="utf-8")
+
+            class Label:
+                text = ""
+
+                def setText(self, text):
+                    self.text = text
+
+                def setStyleSheet(self, _style):
+                    pass
+
+                def show(self):
+                    pass
+
+            class View:
+                def hide(self):
+                    pass
+
+            class Dummy:
+                _closing = False
+                session_id = 7
+                current_directory = str(root)
+                image_paths = ["stale.jpg"]
+                path_mtimes = {}
+                path_sort_keys = {}
+                current_index = 5
+                image_label = Label()
+                image_view = View()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+                def _clear_progress(self):
+                    main.FastPhotoSorter._clear_progress(self)
+
+            dummy = Dummy()
+            warning = "扫描进程意外结束。"
+            main.FastPhotoSorter.on_scan_finished(dummy, 7, [], warning)
+
+            self.assertEqual(json.loads(progress_file.read_text(encoding="utf-8")), saved)
+            self.assertEqual(dummy.current_index, -1)
+            self.assertIn("未找到任何图片文件", dummy.image_label.text)
+            self.assertIn(warning, dummy.image_label.text)
+
+    def test_preview_reads_capture_date_from_exif_sub_ifd(self):
+        class Sink:
+            value = None
+
+            def send(self, value):
+                self.value = value
+
+            def close(self):
+                pass
+
+        def decode(path):
+            sink = Sink()
+            main._decode_preview_in_subprocess(
+                sink, str(path), 64, 64, 36867, 24_000_000, ("JPEG", "MPO"), 6_000_000
+            )
+            self.assertEqual(sink.value[0], "ok", sink.value)
+            return sink.value[1]
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            camera = root / "camera.jpg"
+            exif = Image.Exif()
+            exif[0x0132] = "2024:01:01 00:00:00"  # IFD0 DateTime (last edit)
+            exif.get_ifd(0x8769)[36867] = "2021:05:06 07:08:09"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(camera, exif=exif.tobytes())
+            self.assertEqual(decode(camera)["date"], "2021:05:06 07:08:09")
+
+            legacy = root / "legacy.jpg"
+            exif = Image.Exif()
+            exif[36867] = "2019:02:03 04:05:06"  # misplaced in IFD0 by some writers
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(legacy, exif=exif.tobytes())
+            self.assertEqual(decode(legacy)["date"], "2019:02:03 04:05:06")
+
+            plain = root / "plain.png"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(plain)
+            self.assertEqual(decode(plain)["date"], "未知")
+
+    def test_zoom_supports_modes_imageqt_cannot_wrap(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            sources = {
+                "cmyk.jpg": Image.new("CMYK", (300, 200), (0, 255, 255, 0)),
+                "gray-alpha.png": Image.new("LA", (300, 200), (128, 255)),
+                "int32.tif": Image.new("I", (300, 200), 100),
+            }
+            thumbnail = QImage(150, 100, QImage.Format.Format_ARGB32)
+            thumbnail.fill(0)
+            view = main.ZoomableView()
+            view.resize(400, 300)
+            view.show()
+            self.app.processEvents()
+            warnings = []
+            view.zoom_warning.connect(warnings.append)
+            try:
+                for name, image in sources.items():
+                    path = root / name
+                    image.save(path)
+                    view.setPixmap(QPixmap.fromImage(thumbnail), str(path))
+                    view.set_zoom(True)
+                    self.assertTrue(view.is_zoomed, name)
+                    self.assertEqual(view.pixmap_item.pixmap().width(), 300, name)
+                    view.set_zoom(False)
+                self.assertEqual(warnings, [])
+
+                # The CMYK pixel (C=0, M=Y=255) must come out red, as the preview shows it.
+                view.setPixmap(QPixmap.fromImage(thumbnail), str(root / "cmyk.jpg"))
+                view.set_zoom(True)
+                color = view.pixmap_item.pixmap().toImage().pixelColor(150, 100)
+                self.assertGreater(color.red(), 200)
+                self.assertLess(max(color.green(), color.blue()), 60)
+            finally:
+                view.close()
+
+    def test_progress_write_is_atomic(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            paths = [str(root / "first.jpg"), str(root / "second.jpg")]
+
+            class Dummy:
+                current_directory = str(root)
+                image_paths = paths
+                path_mtimes = {paths[0]: 1.0, paths[1]: 2.0}
+                path_sort_keys = {
+                    path: (mtime, os.path.normcase(path))
+                    for path, mtime in path_mtimes.items()
+                }
+                current_index = 0
+                deleted_indices = set()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+            dummy = Dummy()
+            main.FastPhotoSorter.save_progress(dummy)
+            original = progress_file.read_text(encoding="utf-8")
+            self.assertEqual(json.loads(original)["last_path"], paths[0])
+
+            # A write that dies half-way (disk full, crash) must leave the old file.
+            def interrupted_dump(data, handle, **_kwargs):
+                handle.write('{"status": "in_pro')
+                raise OSError("No space left on device")
+
+            dummy.current_index = 1
+            with patch.object(main.json, "dump", side_effect=interrupted_dump):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(progress_file.read_text(encoding="utf-8"), original)
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
+            # Windows refuses to replace a file another process holds open; the
+            # complete new checkpoint must still land.
+            with patch.object(main.os, "replace", side_effect=PermissionError("in use")):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(
+                json.loads(progress_file.read_text(encoding="utf-8"))["last_path"], paths[1]
+            )
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

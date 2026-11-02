@@ -51,4 +51,5 @@
 - 阶段 6.3（P3）：`claude/perf-load-priority`，先提交特征测试，再提交优化并新增 `bench_load_priority.py`；第 1 种方案即达标；PR #5 → `claude/review-fixes`（未合并）。
 - 阶段 7：用临时 worktree 验证三个 perf 分支合入后共 47 项测试、0 失败；写出 `00-SUMMARY.md`。全部阶段完成。
 - 收尾复核：`origin/main` 在执行期间被他人更新（合并了 PR #1）；确认 PR #2 与新 main 没有冲突，新 `CLAUDE.md` 不影响已完成的工作。
+- 审查后追加（用户要求）：`claude/fix-medium-issues` 修复 M1、M2、M3、M4、M6，每项都先写回归测试并确认它在修复前失败；38 项测试 37 通过、0 失败、1 跳过；PR #6 → `claude/review-fixes`（未合并）。
 - 审查后追加（用户要求）：解决冲突并依次合并 #3 → #4 → #5 到 `claude/review-fixes`（#4、#5 合并前先把最新 base 合入各自分支，没有 force push）；合并后共 47 项测试，46 通过、0 失败、1 跳过；#2 与 main 无冲突，仍未合并。
