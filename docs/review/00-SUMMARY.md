@@ -2,7 +2,7 @@
 
 > 按 `docs/review/RUNBOOK.md` 无人值守执行，阶段 0–7 全部完成。没有推送到 `main`，没有 force push，没有合并任何 PR，没有删除任何远程分支。
 > **后续**：之后按你的要求解决了冲突，并依次合并了 #3 → #4 → #5，随后又合并了 #6（目标均为 `claude/review-fixes`）；#2（→ `main`）按你的要求暂不合并。
-> 详细记录：[`PROGRESS.md`](PROGRESS.md) · [`01-architecture.md`](01-architecture.md) · [`02-findings.md`](02-findings.md) · [`03-perf-plan.md`](03-perf-plan.md)
+> 详细记录：[`PROGRESS.md`](PROGRESS.md) · [`01-architecture.md`](01-architecture.md) · [`02-findings.md`](02-findings.md) · [`03-perf-plan.md`](03-perf-plan.md) · [`04-windows-handoff.md`](04-windows-handoff.md)（Windows 本地适配交接）
 
 ## 一句话结论
 
