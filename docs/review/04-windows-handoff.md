@@ -2,7 +2,7 @@
 
 > 面向：在本地 Windows 电脑上用 Claude Code 继续做 Windows 适配的人（以及本地的 Claude）。
 > 分支：`claude/review-fixes`。**本文所有 `文件:行号` 以提交 `52198c9` 为准**（本文档提交本身不改代码）。
-> **行号偏移**：[#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)（修复 N1、N2）合并后，代码行号会后移。换算方法如下（左边是本文中的行号）：
+> **行号偏移**：[#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)（修复 N1、N2）**已合并**，当前分支的代码行号相对本文已经后移。换算方法如下（左边是本文中的行号）：
 >
 > | 文件 | 本文行号 | #7 合并后 |
 > | --- | --- | --- |
@@ -23,8 +23,8 @@
 
 建议的验证顺序：
 
-1. **自动测试**（第 4 节）。Windows 上应该是 52 项全部运行、0 跳过（#7 合并后是 54 项），包括云端一直跳过的 Windows 属性测试。
-2. **云端复现过、已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复的两个问题**（待审阅合并），需要在 Windows 上确认修复效果：
+1. **自动测试**（第 4 节）。Windows 上应该是 **54 项**全部运行、0 跳过，包括云端一直跳过的 Windows 属性测试。
+2. **云端复现过、已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复的两个问题**（#7 已合并），需要在 Windows 上确认修复效果：
    - **N1**：方向键 → ↑ ← 原来完全无效，见 W-03。
    - **N2**：输出被重定向时，文件名含 GBK 无法编码的字符会导致删除后崩溃，见 W-10。
 3. **只能在 Windows 上验证的数据安全项**：
@@ -44,7 +44,7 @@
 | 第 1 轮 | 按 RUNBOOK 审查：高危修复 H1、审查文档、基准脚本 `bench/` | H1 等提交直接在 `claude/review-fixes` 上；[#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2)（`claude/review-fixes` → `main`） | #2 **未合并** |
 | 第 2 轮 | 性能优化 P1、P2、P3 | [#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3)、[#4](https://github.com/OranngeAustin/fast-photo-sorter/pull/4)、[#5](https://github.com/OranngeAustin/fast-photo-sorter/pull/5) → `claude/review-fixes` | 已合并 |
 | 第 3 轮 | 中级问题 M1、M2、M3、M4、M6 | [#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6) → `claude/review-fixes` | 已合并 |
-| 第 4 轮 | 交接时发现的 N1、N2 | [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) → `claude/review-fixes` | **待审阅** |
+| 第 4 轮 | 交接时发现的 N1、N2 | [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) → `claude/review-fixes` | 已合并 |
 
 发现编号的含义见 `docs/review/02-findings.md`，性能项 P1–P7 见 `docs/review/03-perf-plan.md`。
 
@@ -64,9 +64,9 @@
 | 文档 / README | `README.md` | 删除说明（加载中按 W 无效）、预览解码说明、原子写入与扫描失败保留进度、测试数 52 | H1、P1、M2、M6 | #2、#3、#6 | — |
 | 基准 | `bench/` | 新增 `bench_preview`、`bench_scan`、`bench_progress`、`bench_memory`、`bench_load_priority`；`bench_progress` 改为通过 `_write_json_atomically` 计数 | P1–P3 | #2、#5、#6 | — |
 
-测试数量：基线 32 项 → 现在 **52 项**（云端 51 通过、1 跳过）；#7 合并后为 **54 项**（云端 53 通过、1 跳过）。
+测试数量：基线 32 项 → #6 合并后 52 项 → #7 合并后 **54 项**（云端 53 通过、1 跳过）。
 
-#7 的改动（待审阅）：N1 给图片视图设置 `NoFocus`，方向键不再被它吞掉（回归测试 `test_arrow_keys_reach_window_even_after_clicking_image`）；N2 启动时把 stdout/stderr 的错误策略改为 `backslashreplace`，无法编码的文件名不再导致崩溃（回归测试 `test_delete_survives_console_that_cannot_encode_file_name`）。
+#7 的改动（已合并）：N1 给图片视图设置 `NoFocus`，方向键不再被它吞掉（回归测试 `test_arrow_keys_reach_window_even_after_clicking_image`）；N2 启动时把 stdout/stderr 的错误策略改为 `backslashreplace`，无法编码的文件名不再导致崩溃（回归测试 `test_delete_survives_console_that_cannot_encode_file_name`）。
 
 ---
 
@@ -264,7 +264,7 @@ python -m pip install -r requirements.txt
 python -c "import sys, PyQt6.QtCore as q, PIL, importlib.metadata as m; print(sys.version); print('PyQt6', q.PYQT_VERSION_STR, 'Qt', q.QT_VERSION_STR); print('Pillow', PIL.__version__); print('Send2Trash', m.version('Send2Trash'))"
 ```
 
-**A-02 全部测试（离屏）**。预期：`Ran 52 tests`（#7 合并后是 54）加 `OK`，**没有 skipped**。
+**A-02 全部测试（离屏）**。预期：`Ran 54 tests` 加 `OK`，**没有 skipped**。
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
@@ -521,7 +521,7 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 
 ## 6. 已知问题（标为跳过或未处理的发现）
 
-已修复的项目（仅供对照）：H1、M1、M2、M3、M4、M6、L6（由 P3 #5 解决）、L8（由 P2 #4 解决）、P1；N1、N2 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复（待审阅）。
+已修复的项目（仅供对照）：H1、M1、M2、M3、M4、M6、L6（由 P3 #5 解决）、L8（由 P2 #4 解决）、P1；N1、N2 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复（已合并，待 Windows 确认）。
 
 | 编号 | 问题 | 级别 | 跳过原因 | Windows 上要关注什么 |
 | --- | --- | --- | --- | --- |
@@ -545,8 +545,8 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 | P7 | 放大改到后台线程 | 性能 | UI 重构 | — |
 | Q1 | 网络盘和 U 盘上删除可能是**永久删除** | 待确认（可能是高） | 只能在 Windows 验证 | **W-08，最优先** |
 | Q3 | 加载中按 W 被忽略（H1 的交互取舍） | 待确认 | 交互偏好 | W-06 |
-| **N1** | 窗口焦点落在图片视图上时，方向键被吞掉，README 宣传的 → ↑ ← 无效 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复，待审阅合并 | W-03 确认 |
-| **N2** | stdout 被重定向且非 UTF-8 时，文件名含 GBK 无法编码的字符会导致删除后崩溃 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复，待审阅合并 | W-10 确认 |
+| **N1** | 窗口焦点落在图片视图上时，方向键被吞掉，README 宣传的 → ↑ ← 无效 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复（已合并） | W-03 确认 |
+| **N2** | stdout 被重定向且非 UTF-8 时，文件名含 GBK 无法编码的字符会导致删除后崩溃 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复（已合并） | W-10 确认 |
 | **N3** | 高 DPI 下预览可能发糊，1:1 放大并非物理像素 1:1 | 低到中（新） | 同上；属于推断 | W-21 |
 | **N4** | 中文输入法的中文模式下，字母快捷键可能无效 | 低（新） | 同上；属于推断 | W-22 |
 | 其他 | `CLAUDE.md` 只在 `main` 上，里面的测试数还是 32；PR #2 未合并；`bench_memory.py` 只能在 POSIX 上运行；`.gitignore` 里没有 `.venv/` | — | 按你的要求没有合并 main | 本地用 `.git\info\exclude` 忽略 `.venv/` |
@@ -578,7 +578,7 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 | 编号 | 项目 | 结果 | 报错信息 / 备注 |
 | --- | --- | --- | --- |
 | A-01 | 安装依赖、记录版本 | | |
-| A-02 | 全部测试（offscreen）：52 项（#7 合并后 54 项）、0 跳过 | | |
+| A-02 | 全部测试（offscreen）：54 项、0 跳过 | | |
 | A-03 | `test_scanner_skips_windows_hidden_and_system_entries` | | |
 | A-04 | 全部测试（Windows 平台插件） | | |
 | A-05 | `bench_preview`（解码与往返中位数） | | |

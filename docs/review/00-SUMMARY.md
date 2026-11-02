@@ -1,7 +1,7 @@
 # 00 · 审查与优化总结
 
 > 按 `docs/review/RUNBOOK.md` 无人值守执行，阶段 0–7 全部完成。没有推送到 `main`，没有 force push，没有合并任何 PR，没有删除任何远程分支。
-> **后续**：之后按你的要求解决了冲突，并依次合并了 #3 → #4 → #5，随后又合并了 #6（目标均为 `claude/review-fixes`）；#2（→ `main`）按你的要求暂不合并。
+> **后续**：之后按你的要求解决了冲突，并依次合并了 #3 → #4 → #5，随后又合并了 #6、#7（目标均为 `claude/review-fixes`）；#2（→ `main`）按你的要求暂不合并。
 > 详细记录：[`PROGRESS.md`](PROGRESS.md) · [`01-architecture.md`](01-architecture.md) · [`02-findings.md`](02-findings.md) · [`03-perf-plan.md`](03-perf-plan.md) · [`04-windows-handoff.md`](04-windows-handoff.md)（Windows 本地适配交接）
 
 ## 一句话结论
@@ -21,7 +21,7 @@
 | 6 算法优化 | P1、P2、P3 各开一个分支：先提交特征测试，再提交优化；每项都只尝试 1 种方案就达到 ≥ 20% → PR #3、#4、#5 |
 | 7 总结 | 本文件 |
 
-## 所有 PR（#3–#6 已按要求合并到 `claude/review-fixes`；#2 待审阅，暂不合并到 `main`）
+## 所有 PR（#3–#7 已按要求合并到 `claude/review-fixes`；#2 待审阅，暂不合并到 `main`）
 
 | PR | 分支 → 目标 | 内容 | 关键数据 | 测试 |
 | --- | --- | --- | --- | --- |
@@ -30,6 +30,7 @@
 | [OranngeAustin/fast-photo-sorter#4](https://github.com/OranngeAustin/fast-photo-sorter/pull/4)（✅ 已合并） | `claude/perf-progress-writes` → `claude/review-fixes` | P2：进度检查点内容未变时不重复写入 | 每次按键写入次数 2 → 1（**−50%**），1000 次按键耗时约 −46% | 37 项：36 通过、1 跳过 |
 | [OranngeAustin/fast-photo-sorter#5](https://github.com/OranngeAustin/fast-photo-sorter/pull/5)（✅ 已合并） | `claude/perf-load-priority` → `claude/review-fixes` | P3：预加载先解码当前照片 | 窗口为空时当前图到达 455 → 245 ms（**约 −46%**） | 37 项：36 通过、1 跳过 |
 | [OranngeAustin/fast-photo-sorter#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6)（✅ 已合并） | `claude/fix-medium-issues` → `claude/review-fixes` | 审查后追加：修复中级问题 M1、M2、M3、M4、M6 | 每个问题一个提交，都附回归测试 | 38 项：37 通过、1 跳过；与 #3–#5 全部合入后 52 项：51 通过、1 跳过 |
+| [OranngeAustin/fast-photo-sorter#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)（✅ 已合并） | `claude/fix-n1-n2` → `claude/review-fixes` | 交接时发现的 N1（方向键被图片视图吞掉）、N2（输出为 GBK 时删除后崩溃） | 每个问题一个提交，都附回归测试 | 54 项：53 通过、1 跳过 |
 
 **main 的变化**：执行期间有人合并了 PR #1（新增 `CLAUDE.md` 和 `.claude/settings.json`，不是本流程合并的）。已确认 #2 与新 `main` 没有冲突，新 `CLAUDE.md` 也没有忽略目录清单。合并 #3–#5 后，记得把 `CLAUDE.md` 中「32 tests」更新为 47。
 
