@@ -1,7 +1,9 @@
 import ctypes
+import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import time
 import unittest
@@ -1100,6 +1102,58 @@ class FastPhotoSorterTests(unittest.TestCase):
                 self.app.processEvents()
                 QTest.qWait(10)
             window.close()
+
+    def test_delete_survives_console_that_cannot_encode_file_name(self):
+        # Redirected stdout on Chinese Windows is cp936 (GBK) with errors="strict".
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            path = str(root / "旅行😀_한국어.jpg")
+            Path(path).write_bytes(b"x")
+            gbk_stdout = io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")
+            gbk_stderr = io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")
+            trashed = []
+
+            class Dummy:
+                current_directory = str(root)
+                image_paths = [path]
+                path_mtimes = {path: 1.0}
+                path_sort_keys = {path: (1.0, os.path.normcase(path))}
+                current_index = 1
+                deleted_indices = set()
+                session_id = 1
+                pending_deletions = {5: (FakeTimer(), path, 0, 1)}
+                last_action = None
+
+                def _progress_path(self):
+                    return str(root / ".sorter_progress.json")
+
+                def save_progress(self):
+                    pass
+
+                def update_view(self):
+                    pass
+
+                def show_operation_error(self, message):
+                    raise AssertionError(f"delete reported as failed: {message}")
+
+            dummy = Dummy()
+            with patch.object(sys, "stdout", gbk_stdout), patch.object(
+                sys, "stderr", gbk_stderr
+            ), patch.object(main, "send2trash", side_effect=trashed.append):
+                main._make_console_output_safe()
+                main.FastPhotoSorter.execute_delete(dummy, path, 5, 0, 1)
+                gbk_stdout.flush()
+
+            self.assertEqual(trashed, [os.path.normpath(path)])
+            self.assertEqual(dummy.deleted_indices, {0})
+            logged = gbk_stdout.buffer.getvalue().decode("gbk")
+            self.assertIn("已移至回收站", logged)
+            self.assertIn("\\U0001f600", logged)
+            self.assertEqual(gbk_stderr.errors, "backslashreplace")
+
+        # pythonw.exe has no console at all: sys.stdout / sys.stderr are None.
+        with patch.object(sys, "stdout", None), patch.object(sys, "stderr", None):
+            main._make_console_output_safe()
 
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
