@@ -37,6 +37,20 @@ from PyQt6.QtWidgets import (
 from send2trash import send2trash
 
 
+def _make_console_output_safe():
+    """Keep print() from raising on file names the console encoding cannot show.
+
+    Redirected stdout/stderr on Chinese Windows use cp936 with errors="strict",
+    so an emoji or Korean file name in a print() inside a Qt slot raised
+    UnicodeEncodeError, which PyQt turns into a fatal abort (after the file had
+    already been trashed). pythonw.exe has no streams at all (None).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="backslashreplace")
+
+
 def _exif_capture_date(exif, tag):
     """Cameras store DateTimeOriginal in the Exif sub-IFD; a few writers put it in IFD0."""
     if not exif or tag is None:
@@ -672,6 +686,11 @@ class ZoomableView(QGraphicsView):
         self.setStyleSheet("border: 0px;")
         self.setBackgroundBrush(QColor("black"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        # QGraphicsView takes focus by default (and on every click), and as a
+        # scroll area it then consumes the arrow keys, so the window never saw
+        # → ↑ ←. Without focus here, every key reaches FastPhotoSorter; drag
+        # panning while zoomed only needs the mouse.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.is_zoomed = False
         self.original_pixmap = None
@@ -1418,6 +1437,7 @@ class FastPhotoSorter(QMainWindow):
 
 
 if __name__ == "__main__":
+    _make_console_output_safe()
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
 

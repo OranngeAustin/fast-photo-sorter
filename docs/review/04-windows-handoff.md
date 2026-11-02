@@ -2,6 +2,20 @@
 
 > 面向：在本地 Windows 电脑上用 Claude Code 继续做 Windows 适配的人（以及本地的 Claude）。
 > 分支：`claude/review-fixes`。**本文所有 `文件:行号` 以提交 `52198c9` 为准**（本文档提交本身不改代码）。
+> **行号偏移**：[#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)（修复 N1、N2）合并后，代码行号会后移。换算方法如下（左边是本文中的行号）：
+>
+> | 文件 | 本文行号 | #7 合并后 |
+> | --- | --- | --- |
+> | `main.py` | 1–39 | 不变 |
+> | `main.py` | 40–674 | +14 |
+> | `main.py` | 675–1420 | +19 |
+> | `main.py` | 1421 及以后 | +20 |
+> | `test.py` | 1 | 不变 |
+> | `test.py` | 2–4 | +1 |
+> | `test.py` | 5–1064 | +2 |
+> | `test.py` | 1065 及以后 | +93 |
+>
+> #7 新增的代码（行号按 #7 合并后计）：`main.py:40-51` 的 `_make_console_output_safe`、`main.py:1440` 的启动调用、`main.py:689-693` 的图片视图 `NoFocus`；测试在 `test.py:1067` 和 `test.py:1106`。
 > 这个分支上没有 `CLAUDE.md`：它只在 `main` 上（来自 PR #1），按你的要求没有合进本分支，所以本地 Claude Code 在这个分支上不会自动加载它。
 > 云端环境：Linux、Python 3.13、`QT_QPA_PLATFORM=offscreen`、tmpfs 临时目录。项目目标是 Windows + Python 3.12。
 
@@ -9,12 +23,10 @@
 
 建议的验证顺序：
 
-1. **自动测试**（第 4 节）。Windows 上应该是 52 项全部运行、0 跳过，包括云端一直跳过的 Windows 属性测试。
-2. **云端已复现、但在 Windows 上可能更严重的新问题**：
-   - **N1**：方向键 → ↑ 可能完全无效。
-   - **N2**：输出被重定向时，文件名含 GBK 无法编码的字符会导致删除后崩溃。
-
-   在 Windows 上确认后，再决定是否修代码。
+1. **自动测试**（第 4 节）。Windows 上应该是 52 项全部运行、0 跳过（#7 合并后是 54 项），包括云端一直跳过的 Windows 属性测试。
+2. **云端复现过、已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复的两个问题**（待审阅合并），需要在 Windows 上确认修复效果：
+   - **N1**：方向键 → ↑ ← 原来完全无效，见 W-03。
+   - **N2**：输出被重定向时，文件名含 GBK 无法编码的字符会导致删除后崩溃，见 W-10。
 3. **只能在 Windows 上验证的数据安全项**：
    - **Q1**：网络盘或 U 盘上删除是否会变成永久删除。
    - **R-04**：文件被占用时的删除行为。
@@ -32,6 +44,7 @@
 | 第 1 轮 | 按 RUNBOOK 审查：高危修复 H1、审查文档、基准脚本 `bench/` | H1 等提交直接在 `claude/review-fixes` 上；[#2](https://github.com/OranngeAustin/fast-photo-sorter/pull/2)（`claude/review-fixes` → `main`） | #2 **未合并** |
 | 第 2 轮 | 性能优化 P1、P2、P3 | [#3](https://github.com/OranngeAustin/fast-photo-sorter/pull/3)、[#4](https://github.com/OranngeAustin/fast-photo-sorter/pull/4)、[#5](https://github.com/OranngeAustin/fast-photo-sorter/pull/5) → `claude/review-fixes` | 已合并 |
 | 第 3 轮 | 中级问题 M1、M2、M3、M4、M6 | [#6](https://github.com/OranngeAustin/fast-photo-sorter/pull/6) → `claude/review-fixes` | 已合并 |
+| 第 4 轮 | 交接时发现的 N1、N2 | [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) → `claude/review-fixes` | **待审阅** |
 
 发现编号的含义见 `docs/review/02-findings.md`，性能项 P1–P7 见 `docs/review/03-perf-plan.md`。
 
@@ -51,7 +64,9 @@
 | 文档 / README | `README.md` | 删除说明（加载中按 W 无效）、预览解码说明、原子写入与扫描失败保留进度、测试数 52 | H1、P1、M2、M6 | #2、#3、#6 | — |
 | 基准 | `bench/` | 新增 `bench_preview`、`bench_scan`、`bench_progress`、`bench_memory`、`bench_load_priority`；`bench_progress` 改为通过 `_write_json_atomically` 计数 | P1–P3 | #2、#5、#6 | — |
 
-测试数量：基线 32 项 → 现在 **52 项**（云端 51 通过、1 跳过）。
+测试数量：基线 32 项 → 现在 **52 项**（云端 51 通过、1 跳过）；#7 合并后为 **54 项**（云端 53 通过、1 跳过）。
+
+#7 的改动（待审阅）：N1 给图片视图设置 `NoFocus`，方向键不再被它吞掉（回归测试 `test_arrow_keys_reach_window_even_after_clicking_image`）；N2 启动时把 stdout/stderr 的错误策略改为 `backslashreplace`，无法编码的文件名不再导致崩溃（回归测试 `test_delete_survives_console_that_cannot_encode_file_name`）。
 
 ---
 
@@ -78,14 +93,15 @@
 
 > 「已复现」= 在云端用实验确认过；「推断」= 根据代码和平台行为推断，需要在 Windows 上验证。每条都对应第 5 节的手动测试编号。
 
-### R-01 输出编码：文件名含 GBK 无法编码的字符时，删除后程序崩溃（N2，已复现）
+### R-01 输出编码：文件名含 GBK 无法编码的字符时，删除后程序崩溃（N2，已复现，✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复）
 - **位置**：`main.py:1307-1311`（`execute_delete` 中，`send2trash` 成功后 `print(f"已移至回收站: {path}")`；`except` 里的 `print` 会再次失败）。其他 `print` 也有同样问题：348（加载线程）、743、855、917、938（扫描警告）、974、1015、1082、1349。
 - **说明**：stdout 被重定向到文件或管道，且没有开启 UTF-8 模式时，中文 Windows 用 cp936（GBK）编码，`errors="strict"`。emoji、韩文等字符会抛出 `UnicodeEncodeError`。
   - 云端模拟 GBK stdout，已确认异常会逃出 `execute_delete`，而此时**文件已经被移进回收站**。
   - 在 Qt 槽函数中出现未处理异常时，PyQt6 会调用 `qFatal()`，程序直接退出。
   - 以下情况**不会**触发：`pythonw`（stdout 为 `None`）、交互式控制台（Windows 控制台走 UTF-8）、`-X utf8`（测试命令带了这个参数，所以测试测不出来）。
   - 以下情况**会**触发：`python main.py > log.txt`、IDE 运行窗口、**通过 Claude Code 的 Bash 工具启动程序**。
-- **验证**：W-10。修复方向：启动时 `sys.stdout.reconfigure(errors="backslashreplace")`，或改用带容错的日志。
+- **修复**（[#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)）：启动时调用 `_make_console_output_safe()`，把 stdout/stderr 的错误策略改为 `backslashreplace`，编码保持不变。`pythonw` 下这两个流为 `None`，不受影响。
+- **验证**：W-10。这是端到端验证，因为单元测试覆盖不到 `__main__` 里的调用。
 
 ### R-02 中文路径与 JSON / 配置文件编码（推断：大概率正常）
 - **位置**：进度写入 `main.py:640-641`（`encoding="utf-8"`、`ensure_ascii=False`）；进度读取 983；配置读写 849、914-915。
@@ -141,12 +157,13 @@
   - 修复方向：目标尺寸乘以 `devicePixelRatioF()`，并给 QPixmap 设置 `devicePixelRatio`。
 - **验证**：W-21。
 
-### R-10 按键事件与键盘焦点（N1 已复现，N4 推断）
+### R-10 按键事件与键盘焦点（N1 已复现，✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复；N4 推断）
 - **位置**：`keyPressEvent` `main.py:1224-1256`；`ZoomableView` 655-777（继承 `QGraphicsView`，焦点策略为 StrongFocus）；`keyReleaseEvent` 1258-1260。
 - **N1（已在 offscreen 平台复现）**：
   - 窗口显示后焦点默认落在 `ZoomableView` 上，点击图片也会让它获得焦点。
   - `QAbstractScrollArea` 会**吃掉方向键**，所以 → 和 ↑ 完全无效，← 被吃掉时撤销也无效；W/A/D 正常。
-  - README 的操作表宣传了方向键。修复方向：给 `ZoomableView` 设置 `setFocusPolicy(Qt.FocusPolicy.NoFocus)`，或在窗口层面安装事件过滤器。
+  - README 的操作表宣传了方向键。
+  - **修复**（[#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7)）：给 `ZoomableView` 设置 `setFocusPolicy(Qt.FocusPolicy.NoFocus)`，所有按键都回落到主窗口；放大后的拖动只依赖鼠标。
 - **N4（推断）**：中文输入法处于中文模式时，字母键会进入输入法组合，W/A/D/O 和空格可能到不了程序。
 - 自动重复：1227 和 1259 忽略了自动重复事件，所以按住空格只会触发一次放大。
 - **验证**：W-03、W-22。
@@ -247,7 +264,7 @@ python -m pip install -r requirements.txt
 python -c "import sys, PyQt6.QtCore as q, PIL, importlib.metadata as m; print(sys.version); print('PyQt6', q.PYQT_VERSION_STR, 'Qt', q.QT_VERSION_STR); print('Pillow', PIL.__version__); print('Send2Trash', m.version('Send2Trash'))"
 ```
 
-**A-02 全部测试（离屏）**。预期：`Ran 52 tests` 加 `OK`，**没有 skipped**。
+**A-02 全部测试（离屏）**。预期：`Ran 52 tests`（#7 合并后是 54）加 `OK`，**没有 skipped**。
 
 ```powershell
 $env:QT_QPA_PLATFORM = 'offscreen'
@@ -471,14 +488,14 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 | --- | --- | --- | --- | --- |
 | W-01 | 首次启动与扫描 | 删除程序目录下的 `config.json`；运行程序；在对话框中选择 `$root` | 窗口最大化，显示「正在快速扫描照片，请稍候...」，随后显示第一张图和左下角 OSD。列表包含 01–08、13、16–19（以及开启长路径时的 09），**不包含** 10、11、12、14、15、HEIC，也不会因为 20 的回环而重复或卡死。程序目录下生成 `config.json` | R-11、R-13 |
 | W-02 | `.bat` 启动 | 把 `.bat` 复制为 `启动照片清理-本地.bat`（**不提交**），第 3 行改成 `"%~dp0.venv\Scripts\pythonw.exe" "main.py"`；双击运行；再把整个项目放到带空格或中文的路径下重复一次 | 不出现控制台窗口，直接打开上次的目录并恢复进度 | R-08 |
-| W-03 | 保留与方向键焦点 | 启动后**不点鼠标**，按 →；再按 D；然后在图片上单击一次，再按 → 和 ↑ | README 的预期是 → 等同于 D、↑ 等同于 W。云端复现的现状是：→ 和 ↑ 无效，D 有效（N1）。如实记录 | R-10 |
+| W-03 | 保留与方向键焦点 | 启动后**不点鼠标**，按 →；再按 D；然后在图片上单击一次，再按 → 和 ↑ | #7 合并后：→ 等同于 D，↑ 等同于 W，← 等同于 A；点击图片前后都有效。#7 合并前（云端复现的现状）：→ ↑ 无效，D 有效（N1）。如实记录所测的是哪个版本 | R-10 |
 | W-04 | 删除进入回收站（本地 NTFS） | 定位到 `17_普通图片.jpg`，按 W，等待 3 秒以上 | 立刻进入下一张，OSD 变成橙色「已删除上一张，按 A 撤销」；3 秒后文件从磁盘消失，**出现在回收站**；从回收站还原它 | R-06 |
 | W-05 | 撤销 | 在 18 上按 W，3 秒内按 A；再在 18 上按 W，等待 5 秒后按 A | 第一次回到 18，文件不会被删除。第二次停留在当前图，文件已进回收站（撤销超时），程序不崩溃 | — |
 | W-06 | 加载中按 W 无效（H1） | 打开一个全是大文件的副本目录（或网络盘），按 D 后**立刻**按 W | 当前图还显示「加载中...」时按 W 没有任何效果，不会进入删除；图片显示出来后再按 W 才生效 | H1 |
 | W-07 | 删除被占用的文件 | 执行 `$lock = …16_被占用.jpg…`；定位到 16，按 W，等待 3 秒；然后 `$lock.Close()`，再按 W | 3 秒后回到 16，OSD 显示「[操作失败] 无法移入回收站，已回到该图片，请稍后重试。」，文件仍在。释放占用后按 W 能正常删除 | R-04 |
 | W-08 | 网络盘和 U 盘上的删除方式 | 在 NAS 共享（或映射盘）和 U 盘上各放 2 张可丢弃的副本；分别打开，按 W，等待 3 秒 | 记录文件去了哪里：本机回收站、NAS 的 `#recycle`，还是**永久消失**。如果永久消失，就证实了 Q1，需要优先修复 | R-06、Q1、M5 |
 | W-09 | 中文、emoji 和超长路径 | 浏览到 08 和 09；查看 OSD 文件名；分别按 W 后再按 A；对 09 也执行一次真正的删除 | 文件名显示正确；预览正常；撤销正常。09 的删除要么成功进回收站，要么显示「无法移入回收站」并回到该图，不能崩溃 | R-02、R-03 |
-| W-10 | 输出重定向时的编码崩溃（N2） | 退出程序；执行 `cmd /c "python main.py > run.log 2>&1"`（**不带** `-X utf8`）；定位到 08，按 W，等待 3 秒 | 当前代码下**可能直接退出**，`run.log` 里有 `UnicodeEncodeError`，而文件已经进了回收站。之后改用 `cmd /c "python -X utf8 main.py > run.log 2>&1"` 重复，应该不会崩溃。最后从回收站还原 08 | R-01 |
+| W-10 | 输出重定向时的编码崩溃（N2） | 退出程序；执行 `cmd /c "python main.py > run.log 2>&1"`（**不带** `-X utf8`）；定位到 08，按 W，等待 3 秒 | #7 合并后：程序**不崩溃**，删除正常，`run.log` 里能看到 `已移至回收站: …\U0001f600…` 这样的转义。#7 合并前：可能直接退出，`run.log` 里有 `UnicodeEncodeError`，而文件已经进了回收站。最后从回收站还原 08 | R-01 |
 | W-11 | 特殊色彩模式放大（M4） | 在 02、03、04 上分别按住空格，松开 | 都能 1:1 放大，并可拖动；02 显示为**红色**；不出现「原图加载失败」 | M4 |
 | W-12 | 超大图 | 浏览到 05，按住空格；浏览到 06 | 05 有预览；按住空格时显示「原图像素过大，已保留适屏预览以避免内存耗尽。」。06 显示「图片像素过大，当前格式无法安全生成预览。」，并且 OSD 中有文件名 | — |
 | W-13 | 方向与拍摄时间（M3） | 浏览到 01；浏览一张真实的手机竖拍照片 | 01 已转正，红块在**右上角**，OSD 的「拍摄时间」为 `2021:05:06 07:08:09`。真实照片显示的是拍摄时间，而不是复制到电脑的时间 | M3、R-15 |
@@ -504,7 +521,7 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 
 ## 6. 已知问题（标为跳过或未处理的发现）
 
-已修复的项目（仅供对照）：H1、M1、M2、M3、M4、M6、L6（由 P3 #5 解决）、L8（由 P2 #4 解决）、P1。
+已修复的项目（仅供对照）：H1、M1、M2、M3、M4、M6、L6（由 P3 #5 解决）、L8（由 P2 #4 解决）、P1；N1、N2 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复（待审阅）。
 
 | 编号 | 问题 | 级别 | 跳过原因 | Windows 上要关注什么 |
 | --- | --- | --- | --- | --- |
@@ -528,8 +545,8 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 | P7 | 放大改到后台线程 | 性能 | UI 重构 | — |
 | Q1 | 网络盘和 U 盘上删除可能是**永久删除** | 待确认（可能是高） | 只能在 Windows 验证 | **W-08，最优先** |
 | Q3 | 加载中按 W 被忽略（H1 的交互取舍） | 待确认 | 交互偏好 | W-06 |
-| **N1** | 窗口焦点落在图片视图上时，方向键被吞掉，README 宣传的 → ↑ ← 无效 | 中（新） | 写交接文档时才发现；云端 offscreen 已复现，按要求本轮只写文档、不改代码 | W-03 |
-| **N2** | stdout 被重定向且非 UTF-8 时，文件名含 GBK 无法编码的字符会导致删除后崩溃 | 中（新） | 同上；云端模拟已复现 | W-10 |
+| **N1** | 窗口焦点落在图片视图上时，方向键被吞掉，README 宣传的 → ↑ ← 无效 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复，待审阅合并 | W-03 确认 |
+| **N2** | stdout 被重定向且非 UTF-8 时，文件名含 GBK 无法编码的字符会导致删除后崩溃 | 中（新） | ✅ 已在 [#7](https://github.com/OranngeAustin/fast-photo-sorter/pull/7) 修复，待审阅合并 | W-10 确认 |
 | **N3** | 高 DPI 下预览可能发糊，1:1 放大并非物理像素 1:1 | 低到中（新） | 同上；属于推断 | W-21 |
 | **N4** | 中文输入法的中文模式下，字母快捷键可能无效 | 低（新） | 同上；属于推断 | W-22 |
 | 其他 | `CLAUDE.md` 只在 `main` 上，里面的测试数还是 32；PR #2 未合并；`bench_memory.py` 只能在 POSIX 上运行；`.gitignore` 里没有 `.venv/` | — | 按你的要求没有合并 main | 本地用 `.git\info\exclude` 忽略 `.venv/` |
@@ -561,7 +578,7 @@ Copy-Item "$root\17_普通图片.jpg", "$root\18_普通图片.jpg" "$m2\子目�
 | 编号 | 项目 | 结果 | 报错信息 / 备注 |
 | --- | --- | --- | --- |
 | A-01 | 安装依赖、记录版本 | | |
-| A-02 | 全部测试（offscreen）：52 项、0 跳过 | | |
+| A-02 | 全部测试（offscreen）：52 项（#7 合并后 54 项）、0 跳过 | | |
 | A-03 | `test_scanner_skips_windows_hidden_and_system_entries` | | |
 | A-04 | 全部测试（Windows 平台插件） | | |
 | A-05 | `bench_preview`（解码与往返中位数） | | |
