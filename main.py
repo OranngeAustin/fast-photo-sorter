@@ -1,8 +1,10 @@
 import json
 import multiprocessing
 import os
+import shutil
 import stat
 import sys
+import tempfile
 import threading
 import time
 from queue import Empty, Queue
@@ -35,6 +37,34 @@ from PyQt6.QtWidgets import (
 from send2trash import send2trash
 
 
+def _make_console_output_safe():
+    """Keep print() from raising on file names the console encoding cannot show.
+
+    Redirected stdout/stderr on Chinese Windows use cp936 with errors="strict",
+    so an emoji or Korean file name in a print() inside a Qt slot raised
+    UnicodeEncodeError, which PyQt turns into a fatal abort (after the file had
+    already been trashed). pythonw.exe has no streams at all (None).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="backslashreplace")
+
+
+def _exif_capture_date(exif, tag):
+    """Cameras store DateTimeOriginal in the Exif sub-IFD; a few writers put it in IFD0."""
+    if not exif or tag is None:
+        return None
+    try:
+        value = exif.get_ifd(ExifTags.IFD.Exif).get(tag)
+    except Exception:
+        # A malformed sub-IFD must not cost the preview itself.
+        value = None
+    if value is None:
+        value = exif.get(tag)
+    return None if value is None else str(value)
+
+
 def _bounded_preview_size(width, height, max_pixels):
     """Bound preview pixels so a pipe transfer cannot grow without limit."""
     width = max(1, int(width))
@@ -44,6 +74,11 @@ def _bounded_preview_size(width, height, max_pixels):
 
     scale = (max_pixels / (width * height)) ** 0.5
     return max(1, int(width * scale)), max(1, int(height * scale))
+
+
+_EXIF_ORIENTATION_TAG = 0x0112
+# EXIF orientations whose upright image swaps width and height.
+_TRANSPOSED_ORIENTATIONS = frozenset({5, 6, 7, 8})
 
 
 def _decode_preview_in_subprocess(
@@ -61,14 +96,16 @@ def _decode_preview_in_subprocess(
         metadata = {"resolution": "未知", "date": "未知"}
         with Image.open(path) as pil_img:
             exif = pil_img.getexif()
-            if exif and exif_datetime_tag is not None and exif_datetime_tag in exif:
-                metadata["date"] = str(exif[exif_datetime_tag])
+            capture_date = _exif_capture_date(exif, exif_datetime_tag)
+            if capture_date is not None:
+                metadata["date"] = capture_date
 
             source_pixels = pil_img.width * pil_img.height
             metadata["resolution"] = f"{pil_img.width} x {pil_img.height}"
+            is_draft_format = (pil_img.format or "").upper() in draft_formats
             preview_allowed = True
             if source_pixels > max_source_pixels:
-                if (pil_img.format or "").upper() in draft_formats:
+                if is_draft_format:
                     pil_img.draft(
                         "RGB",
                         (max(1, target_width), max(1, target_height)),
@@ -79,15 +116,22 @@ def _decode_preview_in_subprocess(
                     preview_allowed = False
 
             if preview_allowed:
-                preview_image = ImageOps.exif_transpose(pil_img)
-                preview_image.thumbnail(
-                    _bounded_preview_size(
-                        target_width,
-                        target_height,
-                        max_transfer_pixels,
-                    ),
-                    Image.Resampling.LANCZOS,
+                box = _bounded_preview_size(
+                    target_width,
+                    target_height,
+                    max_transfer_pixels,
                 )
+                if exif.get(_EXIF_ORIENTATION_TAG) in _TRANSPOSED_ORIENTATIONS:
+                    box = box[::-1]
+                # Shrink before rotating upright so the full-size image is never
+                # copied; for JPEG this also lets the decoder scale in the DCT
+                # domain (draft) down to no less than the final preview size.
+                pil_img.thumbnail(
+                    box,
+                    Image.Resampling.LANCZOS,
+                    reducing_gap=1.0 if is_draft_format else None,
+                )
+                preview_image = ImageOps.exif_transpose(pil_img)
                 rgba_image = preview_image.convert("RGBA")
                 result = (
                     "ok",
@@ -599,11 +643,36 @@ class DirectoryScanner(QThread):
                 receive_connection.close()
 
 
+def _write_json_atomically(path, data):
+    """Write JSON so a crash or a full disk never leaves a truncated file behind."""
+    directory, name = os.path.split(path)
+    # Dot-prefixed, so the scanner never lists a leftover temporary file.
+    descriptor, temporary_path = tempfile.mkstemp(
+        prefix=f"{name}.", suffix=".tmp", dir=directory or None
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False)
+        try:
+            os.replace(temporary_path, path)
+        except PermissionError:
+            # Windows cannot replace a file another process (antivirus, a sync
+            # client) holds open; the new content is complete, so copy it over.
+            shutil.copyfile(temporary_path, path)
+    finally:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+
+
 class ZoomableView(QGraphicsView):
     """Image view with a bounded full-resolution zoom path."""
 
     zoom_warning = pyqtSignal(str)
     MAX_FULL_ZOOM_PIXELS = 24_000_000
+    # Modes ImageQt can wrap directly; CMYK, LA, I, F and others cannot.
+    _IMAGEQT_MODES = frozenset({"1", "L", "P", "RGB", "RGBA", "I;16"})
 
     def __init__(self):
         super().__init__()
@@ -617,6 +686,11 @@ class ZoomableView(QGraphicsView):
         self.setStyleSheet("border: 0px;")
         self.setBackgroundBrush(QColor("black"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        # QGraphicsView takes focus by default (and on every click), and as a
+        # scroll area it then consumes the arrow keys, so the window never saw
+        # → ↑ ←. Without focus here, every key reaches FastPhotoSorter; drag
+        # panning while zoomed only needs the mouse.
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         self.is_zoomed = False
         self.original_pixmap = None
@@ -678,6 +752,9 @@ class ZoomableView(QGraphicsView):
                         return
 
                     pil_img = ImageOps.exif_transpose(pil_img)
+                    if pil_img.mode not in self._IMAGEQT_MODES:
+                        # Same conversion the preview uses, so 1:1 matches it.
+                        pil_img = pil_img.convert("RGBA")
                     self.full_pixmap = QPixmap.fromImage(ImageQt(pil_img).copy())
                     self.pixmap_item.setPixmap(self.full_pixmap)
                     self._update_scene_rect()
@@ -738,6 +815,7 @@ class FastPhotoSorter(QMainWindow):
         self.deleted_indices = set()
         self.pending_deletions = {}
         self.last_action = None
+        self._saved_progress = None
         self.session_id = 0
         self._scanners = set()
         self._closing = False
@@ -844,6 +922,7 @@ class FastPhotoSorter(QMainWindow):
         self.path_sort_keys = {}
         self.cache.clear()
         self.deleted_indices.clear()
+        self._saved_progress = None
         self.loader.begin_session(self.session_id)
 
     def load_directory(self, directory):
@@ -884,8 +963,15 @@ class FastPhotoSorter(QMainWindow):
         }
         if not self.image_paths:
             self.current_index = -1
-            self._clear_progress()
-            self.image_label.setText("未找到任何图片文件")
+            message = "未找到任何图片文件"
+            if warning:
+                # An empty result from a scan that hit errors (crashed child,
+                # unreadable folders, a share dropping out) proves nothing about
+                # the folder, so the saved progress must survive it.
+                message += f"\n\n扫描未完整完成，已保留原有进度：\n{warning}"
+            else:
+                self._clear_progress()
+            self.image_label.setText(message)
             self.image_label.setStyleSheet("color: white; font-size: 24px;")
             self.image_label.show()
             self.image_view.hide()
@@ -898,6 +984,7 @@ class FastPhotoSorter(QMainWindow):
         return os.path.join(self.current_directory, ".sorter_progress.json")
 
     def _clear_progress(self):
+        self._saved_progress = None
         progress_file = self._progress_path()
         try:
             if os.path.isfile(progress_file):
@@ -1002,14 +1089,28 @@ class FastPhotoSorter(QMainWindow):
                     ),
                 }
 
+        progress_file = self._progress_path()
+        # Each navigation reaches here twice (the action, then request_cache);
+        # skip rewriting a checkpoint that is already on disk.
+        if getattr(self, "_saved_progress", None) == (progress_file, data):
+            return
         try:
-            with open(self._progress_path(), "w", encoding="utf-8") as progress_handle:
-                json.dump(data, progress_handle, ensure_ascii=False)
+            _write_json_atomically(progress_file, data)
         except Exception as exc:
+            self._saved_progress = None
             print(f"Failed to save progress: {exc}")
+        else:
+            self._saved_progress = (progress_file, data)
 
     def _has_current_image(self):
         return 0 <= self.current_index < len(self.image_paths)
+
+    def _current_image_is_shown(self):
+        """True once the current item's preview, or its load error with file name, is on screen."""
+        if not self._has_current_image():
+            return False
+        cache_entry = self.cache.get(self.current_index)
+        return bool(cache_entry) and cache_entry[2] == self.image_paths[self.current_index]
 
     def update_view(self):
         if not self._has_current_image():
@@ -1087,12 +1188,13 @@ class FastPhotoSorter(QMainWindow):
         self.update_osd_position()
 
     def request_cache(self):
+        # The loader decodes in request order: the photo on screen first, then
+        # the ones ahead, and the previous photo (only needed for undo) last.
         needed_indices = list(
-            range(
-                max(0, self.current_index - 1),
-                min(len(self.image_paths), self.current_index + 4),
-            )
+            range(self.current_index, min(len(self.image_paths), self.current_index + 4))
         )
+        if self.current_index > 0:
+            needed_indices.append(self.current_index - 1)
 
         for index in list(self.cache):
             if index not in needed_indices:
@@ -1139,7 +1241,9 @@ class FastPhotoSorter(QMainWindow):
         self.update_osd_position()
 
     def keyPressEvent(self, event):
-        if event.isAutoRepeat():
+        # Once shutdown has begun (pending deletions already cancelled), no key
+        # may queue a new deletion, move on or start a new scan.
+        if event.isAutoRepeat() or getattr(self, "_closing", False):
             return
 
         key = event.key()
@@ -1183,7 +1287,9 @@ class FastPhotoSorter(QMainWindow):
         self.update_view()
 
     def action_delete(self):
-        if not self._has_current_image():
+        # While "加载中..." is shown the user has seen neither the photo nor its
+        # file name, so W must not queue a file they never looked at.
+        if not self._current_image_is_shown():
             return
 
         path = self.image_paths[self.current_index]
@@ -1331,6 +1437,7 @@ class FastPhotoSorter(QMainWindow):
 
 
 if __name__ == "__main__":
+    _make_console_output_safe()
     multiprocessing.freeze_support()
     app = QApplication(sys.argv)
 

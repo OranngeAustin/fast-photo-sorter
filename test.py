@@ -1,7 +1,9 @@
 import ctypes
+import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import time
 import unittest
@@ -11,7 +13,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageOps, ImageStat
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication
@@ -859,6 +861,300 @@ class FastPhotoSorterTests(unittest.TestCase):
             self.assertEqual(data["status"], "in_progress")
             self.assertEqual(data["last_path"], image_path)
 
+    def test_keys_are_ignored_once_shutdown_has_begun(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+            def select_directory(self):
+                calls.append("select_directory")
+
+        calls = []
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "shown.jpg")
+            window.image_paths = [path, os.path.join("photos", "next.jpg")]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.cache[0] = (
+                QPixmap(),
+                {"size_mb": 0.1, "resolution": "未知", "date": "未知", "error": "图片加载失败"},
+                path,
+            )
+            window.update_view()
+            window._begin_shutdown()
+
+            for key in (Qt.Key.Key_W, Qt.Key.Key_D, Qt.Key.Key_O):
+                window.keyPressEvent(Event(key))
+
+            self.assertEqual(window.pending_deletions, {})
+            self.assertEqual(window.current_index, 0)
+            self.assertEqual(calls, [])
+        finally:
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
+    def test_incomplete_empty_scan_keeps_progress(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            saved = {"status": "in_progress", "last_path": str(root / "a" / "x.jpg")}
+            progress_file.write_text(json.dumps(saved), encoding="utf-8")
+
+            class Label:
+                text = ""
+
+                def setText(self, text):
+                    self.text = text
+
+                def setStyleSheet(self, _style):
+                    pass
+
+                def show(self):
+                    pass
+
+            class View:
+                def hide(self):
+                    pass
+
+            class Dummy:
+                _closing = False
+                session_id = 7
+                current_directory = str(root)
+                image_paths = ["stale.jpg"]
+                path_mtimes = {}
+                path_sort_keys = {}
+                current_index = 5
+                image_label = Label()
+                image_view = View()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+                def _clear_progress(self):
+                    main.FastPhotoSorter._clear_progress(self)
+
+            dummy = Dummy()
+            warning = "扫描进程意外结束。"
+            main.FastPhotoSorter.on_scan_finished(dummy, 7, [], warning)
+
+            self.assertEqual(json.loads(progress_file.read_text(encoding="utf-8")), saved)
+            self.assertEqual(dummy.current_index, -1)
+            self.assertIn("未找到任何图片文件", dummy.image_label.text)
+            self.assertIn(warning, dummy.image_label.text)
+
+    def test_preview_reads_capture_date_from_exif_sub_ifd(self):
+        class Sink:
+            value = None
+
+            def send(self, value):
+                self.value = value
+
+            def close(self):
+                pass
+
+        def decode(path):
+            sink = Sink()
+            main._decode_preview_in_subprocess(
+                sink, str(path), 64, 64, 36867, 24_000_000, ("JPEG", "MPO"), 6_000_000
+            )
+            self.assertEqual(sink.value[0], "ok", sink.value)
+            return sink.value[1]
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            camera = root / "camera.jpg"
+            exif = Image.Exif()
+            exif[0x0132] = "2024:01:01 00:00:00"  # IFD0 DateTime (last edit)
+            exif.get_ifd(0x8769)[36867] = "2021:05:06 07:08:09"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(camera, exif=exif.tobytes())
+            self.assertEqual(decode(camera)["date"], "2021:05:06 07:08:09")
+
+            legacy = root / "legacy.jpg"
+            exif = Image.Exif()
+            exif[36867] = "2019:02:03 04:05:06"  # misplaced in IFD0 by some writers
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(legacy, exif=exif.tobytes())
+            self.assertEqual(decode(legacy)["date"], "2019:02:03 04:05:06")
+
+            plain = root / "plain.png"
+            Image.new("RGB", (40, 30), (1, 2, 3)).save(plain)
+            self.assertEqual(decode(plain)["date"], "未知")
+
+    def test_zoom_supports_modes_imageqt_cannot_wrap(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            sources = {
+                "cmyk.jpg": Image.new("CMYK", (300, 200), (0, 255, 255, 0)),
+                "gray-alpha.png": Image.new("LA", (300, 200), (128, 255)),
+                "int32.tif": Image.new("I", (300, 200), 100),
+            }
+            thumbnail = QImage(150, 100, QImage.Format.Format_ARGB32)
+            thumbnail.fill(0)
+            view = main.ZoomableView()
+            view.resize(400, 300)
+            view.show()
+            self.app.processEvents()
+            warnings = []
+            view.zoom_warning.connect(warnings.append)
+            try:
+                for name, image in sources.items():
+                    path = root / name
+                    image.save(path)
+                    view.setPixmap(QPixmap.fromImage(thumbnail), str(path))
+                    view.set_zoom(True)
+                    self.assertTrue(view.is_zoomed, name)
+                    self.assertEqual(view.pixmap_item.pixmap().width(), 300, name)
+                    view.set_zoom(False)
+                self.assertEqual(warnings, [])
+
+                # The CMYK pixel (C=0, M=Y=255) must come out red, as the preview shows it.
+                view.setPixmap(QPixmap.fromImage(thumbnail), str(root / "cmyk.jpg"))
+                view.set_zoom(True)
+                color = view.pixmap_item.pixmap().toImage().pixelColor(150, 100)
+                self.assertGreater(color.red(), 200)
+                self.assertLess(max(color.green(), color.blue()), 60)
+            finally:
+                view.close()
+
+    def test_progress_write_is_atomic(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            progress_file = root / ".sorter_progress.json"
+            paths = [str(root / "first.jpg"), str(root / "second.jpg")]
+
+            class Dummy:
+                current_directory = str(root)
+                image_paths = paths
+                path_mtimes = {paths[0]: 1.0, paths[1]: 2.0}
+                path_sort_keys = {
+                    path: (mtime, os.path.normcase(path))
+                    for path, mtime in path_mtimes.items()
+                }
+                current_index = 0
+                deleted_indices = set()
+
+                def _progress_path(self):
+                    return str(progress_file)
+
+            dummy = Dummy()
+            main.FastPhotoSorter.save_progress(dummy)
+            original = progress_file.read_text(encoding="utf-8")
+            self.assertEqual(json.loads(original)["last_path"], paths[0])
+
+            # A write that dies half-way (disk full, crash) must leave the old file.
+            def interrupted_dump(data, handle, **_kwargs):
+                handle.write('{"status": "in_pro')
+                raise OSError("No space left on device")
+
+            dummy.current_index = 1
+            with patch.object(main.json, "dump", side_effect=interrupted_dump):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(progress_file.read_text(encoding="utf-8"), original)
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
+            # Windows refuses to replace a file another process holds open; the
+            # complete new checkpoint must still land.
+            with patch.object(main.os, "replace", side_effect=PermissionError("in use")):
+                main.FastPhotoSorter.save_progress(dummy)
+            self.assertEqual(
+                json.loads(progress_file.read_text(encoding="utf-8"))["last_path"], paths[1]
+            )
+            self.assertEqual(os.listdir(root), [progress_file.name])
+
+    def test_arrow_keys_reach_window_even_after_clicking_image(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        calls = []
+        window.action_keep = lambda: calls.append("keep")
+        window.action_delete = lambda: calls.append("delete")
+        window.action_undo = lambda: calls.append("undo")
+        window._has_current_image = lambda: True
+        try:
+            window.show()
+            window.activateWindow()
+            self.assertTrue(QTest.qWaitForWindowActive(window))
+            arrows = (Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Left)
+
+            # Sent through the window, keys reach whatever widget Qt routes them
+            # to, exactly like real key presses.
+            for key in arrows:
+                QTest.keyClick(window.windowHandle(), key)
+            self.assertEqual(calls, ["keep", "delete", "undo"])
+
+            # Clicking the photo (left-button zoom) must not steal the arrows.
+            window.image_view.show()
+            QTest.mouseClick(
+                window.image_view.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(10, 10)
+            )
+            for key in arrows:
+                QTest.keyClick(window.windowHandle(), key)
+            self.assertEqual(calls, ["keep", "delete", "undo"] * 2)
+        finally:
+            window._begin_shutdown()
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
+    def test_delete_survives_console_that_cannot_encode_file_name(self):
+        # Redirected stdout on Chinese Windows is cp936 (GBK) with errors="strict".
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            path = str(root / "旅行😀_한국어.jpg")
+            Path(path).write_bytes(b"x")
+            gbk_stdout = io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")
+            gbk_stderr = io.TextIOWrapper(io.BytesIO(), encoding="gbk", errors="strict")
+            trashed = []
+
+            class Dummy:
+                current_directory = str(root)
+                image_paths = [path]
+                path_mtimes = {path: 1.0}
+                path_sort_keys = {path: (1.0, os.path.normcase(path))}
+                current_index = 1
+                deleted_indices = set()
+                session_id = 1
+                pending_deletions = {5: (FakeTimer(), path, 0, 1)}
+                last_action = None
+
+                def _progress_path(self):
+                    return str(root / ".sorter_progress.json")
+
+                def save_progress(self):
+                    pass
+
+                def update_view(self):
+                    pass
+
+                def show_operation_error(self, message):
+                    raise AssertionError(f"delete reported as failed: {message}")
+
+            dummy = Dummy()
+            with patch.object(sys, "stdout", gbk_stdout), patch.object(
+                sys, "stderr", gbk_stderr
+            ), patch.object(main, "send2trash", side_effect=trashed.append):
+                main._make_console_output_safe()
+                main.FastPhotoSorter.execute_delete(dummy, path, 5, 0, 1)
+                gbk_stdout.flush()
+
+            self.assertEqual(trashed, [os.path.normpath(path)])
+            self.assertEqual(dummy.deleted_indices, {0})
+            logged = gbk_stdout.buffer.getvalue().decode("gbk")
+            self.assertIn("已移至回收站", logged)
+            self.assertIn("\\U0001f600", logged)
+            self.assertEqual(gbk_stderr.errors, "backslashreplace")
+
+        # pythonw.exe has no console at all: sys.stdout / sys.stderr are None.
+        with patch.object(sys, "stdout", None), patch.object(sys, "stderr", None):
+            main._make_console_output_safe()
+
     def test_scanner_keeps_only_photo_formats(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -933,6 +1229,48 @@ class FastPhotoSorterTests(unittest.TestCase):
                 [os.path.basename(path) for _, path in records], ["visible.jpg"]
             )
 
+    def test_delete_ignored_until_current_image_is_shown(self):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        try:
+            path = os.path.join("photos", "unseen.jpg")
+            window.image_paths = [path, os.path.join("photos", "next.jpg")]
+            window.current_index = 0
+            window.loader.update_window = lambda *_args: None
+            window.update_view()
+            self.assertEqual(window.image_label.text(), "加载中...")
+
+            window.keyPressEvent(Event(Qt.Key.Key_W))
+            self.assertEqual(window.pending_deletions, {})
+            self.assertEqual(window.current_index, 0)
+
+            window.cache[0] = (
+                QPixmap(),
+                {
+                    "size_mb": 0.1,
+                    "resolution": "未知",
+                    "date": "未知",
+                    "error": "图片加载失败",
+                },
+                path,
+            )
+            window.update_view()
+            window.keyPressEvent(Event(Qt.Key.Key_W))
+            self.assertEqual(
+                [pending[1] for pending in window.pending_deletions.values()], [path]
+            )
+            self.assertEqual(window.current_index, 1)
+        finally:
+            window._begin_shutdown()
+            deadline = time.monotonic() + 2
+            while window._workers_are_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                QTest.qWait(10)
+            window.close()
+
     def test_failed_preview_keeps_file_name_visible(self):
         class NoStartupSorter(main.FastPhotoSorter):
             def startup_check(self):
@@ -967,6 +1305,295 @@ class FastPhotoSorterTests(unittest.TestCase):
                 self.app.processEvents()
                 QTest.qWait(10)
             window.close()
+
+
+class _PipeSink:
+    def __init__(self):
+        self.value = None
+
+    def send(self, value):
+        self.value = value
+
+    def close(self):
+        pass
+
+
+def _reference_preview(path, box):
+    """The preview contract: EXIF-upright, fitted into ``box`` with LANCZOS."""
+    with Image.open(path) as source:
+        upright = ImageOps.exif_transpose(source)
+        upright.thumbnail(box, Image.Resampling.LANCZOS)
+        return upright.convert("RGBA")
+
+
+class PreviewDecodeCharacterizationTests(unittest.TestCase):
+    """Pin the observable output of the preview decoder (sizes, orientation,
+    metadata and pixels) so decoder optimizations cannot silently change it."""
+
+    MAX_MEAN_ABS_DIFF = 6.0  # per channel, 0..255: visually indistinguishable
+
+    def decode(self, path, target, max_source=24_000_000, max_transfer=6_000_000):
+        sink = _PipeSink()
+        main._decode_preview_in_subprocess(
+            sink,
+            str(path),
+            target[0],
+            target[1],
+            36867,
+            max_source,
+            ("JPEG", "MPO"),
+            max_transfer,
+        )
+        self.assertEqual(sink.value[0], "ok", sink.value)
+        _, metadata, width, height, pixels = sink.value
+        self.assertEqual(len(pixels), width * height * 4)
+        return metadata, Image.frombytes("RGBA", (width, height), pixels)
+
+    @staticmethod
+    def photo(size):
+        """Smooth gradients plus mild noise, like a real photo."""
+        gradient = Image.linear_gradient("L").resize(size)
+        noise = Image.effect_noise(size, 12)
+        return Image.merge(
+            "RGB",
+            (gradient, Image.blend(gradient.transpose(Image.Transpose.ROTATE_90).resize(size), noise, 0.3), noise),
+        )
+
+    def assert_close(self, actual, expected):
+        self.assertEqual(actual.size, expected.size)
+        stat = ImageStat.Stat(ImageChops.difference(actual, expected).convert("RGB"))
+        for channel_mean in stat.mean:
+            self.assertLessEqual(channel_mean, self.MAX_MEAN_ABS_DIFF)
+
+    def test_landscape_jpeg_is_fitted_into_target(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "landscape.jpg"
+            self.photo((2000, 1500)).save(path, quality=92)
+            metadata, preview = self.decode(path, (800, 500))
+            self.assertEqual(metadata["resolution"], "2000 x 1500")
+            self.assertEqual(preview.size, (667, 500))
+            self.assert_close(preview, _reference_preview(path, (800, 500)))
+
+    def test_rotated_jpeg_is_upright_and_fitted(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "portrait.jpg"
+            image = self.photo((1600, 1200))
+            image.paste((255, 0, 0), (0, 0, 400, 300))  # marker in the stored top-left
+            exif = Image.Exif()
+            exif[0x0112] = 6  # rotate 90 degrees clockwise when displayed
+            image.save(path, quality=92, exif=exif.tobytes())
+            metadata, preview = self.decode(path, (800, 600))
+            self.assertEqual(metadata["resolution"], "1600 x 1200")
+            self.assertEqual(preview.size, (450, 600))
+            red, green, blue, _ = preview.getpixel((preview.width - 20, 20))
+            self.assertGreater(red, 200)
+            self.assertLess(max(green, blue), 60)
+            self.assert_close(preview, _reference_preview(path, (800, 600)))
+
+    def test_png_preview_is_pixel_exact(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "screenshot.png"
+            self.photo((1200, 900)).save(path)
+            _, preview = self.decode(path, (640, 400))
+            self.assertEqual(preview.size, (533, 400))
+            self.assertEqual(preview.tobytes(), _reference_preview(path, (640, 400)).tobytes())
+
+    def test_small_image_is_not_enlarged(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "small.jpg"
+            self.photo((120, 80)).save(path)
+            metadata, preview = self.decode(path, (1920, 1080))
+            self.assertEqual(metadata["resolution"], "120 x 80")
+            self.assertEqual(preview.size, (120, 80))
+
+    def test_transfer_pixel_bound_limits_preview_size(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "bounded.png"
+            self.photo((400, 300)).save(path)
+            _, preview = self.decode(path, (1920, 1080), max_transfer=10_000)
+            self.assertEqual(preview.size, (100, 75))
+
+    def test_oversized_jpeg_uses_draft_within_source_limit(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "huge.jpg"
+            self.photo((1600, 1200)).save(path, quality=92)
+            metadata, preview = self.decode(path, (400, 300), max_source=1_000_000)
+            self.assertEqual(metadata["resolution"], "1600 x 1200")
+            self.assertNotIn("error", metadata)
+            self.assertEqual(preview.size, (400, 300))
+
+
+class ProgressPersistenceCharacterizationTests(unittest.TestCase):
+    """Pin what .sorter_progress.json holds after each user-visible step."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def make_window(self, directory, count=3):
+        class NoStartupSorter(main.FastPhotoSorter):
+            def startup_check(self):
+                pass
+
+        window = NoStartupSorter()
+        window.loader.update_window = lambda *_args: None
+        window.current_directory = directory
+        window.image_paths = [
+            os.path.join(directory, f"IMG_{index}.jpg") for index in range(count)
+        ]
+        window.path_mtimes = {
+            path: float(index) for index, path in enumerate(window.image_paths)
+        }
+        window.path_sort_keys = {
+            path: (mtime, os.path.normcase(path))
+            for path, mtime in window.path_mtimes.items()
+        }
+        window.current_index = 0
+        return window
+
+    def close_window(self, window):
+        window._begin_shutdown()
+        deadline = time.monotonic() + 2
+        while window._workers_are_running() and time.monotonic() < deadline:
+            self.app.processEvents()
+            QTest.qWait(10)
+        window.close()
+
+    @staticmethod
+    def read(directory):
+        with open(os.path.join(directory, ".sorter_progress.json"), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_keep_sequence_persists_each_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.update_view()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+                for index in (1, 2):
+                    window.action_keep()
+                    data = self.read(directory)
+                    self.assertEqual(data["status"], "in_progress")
+                    self.assertEqual(data["last_path"], window.image_paths[index])
+                    self.assertEqual(data["last_mtime"], float(index))
+                    self.assertEqual(
+                        data["last_sort_key"],
+                        [float(index), os.path.normcase(window.image_paths[index])],
+                    )
+                window.action_keep()
+                self.assertEqual(
+                    self.read(directory),
+                    {
+                        "status": "completed",
+                        "last_path": None,
+                        "last_mtime": None,
+                        "last_sort_key": None,
+                    },
+                )
+            finally:
+                self.close_window(window)
+
+    def test_progress_is_rewritten_after_clear(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.save_progress()
+                window._clear_progress()
+                self.assertFalse(os.path.exists(os.path.join(directory, ".sorter_progress.json")))
+                window.save_progress()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+    def test_failed_write_is_retried_with_same_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "later")
+            window = self.make_window(target)
+            try:
+                window.save_progress()  # directory missing: write fails
+                os.mkdir(target)
+                window.save_progress()
+                self.assertEqual(self.read(target)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+    def test_new_session_on_same_directory_rewrites_progress(self):
+        with tempfile.TemporaryDirectory() as directory:
+            window = self.make_window(directory)
+            try:
+                window.save_progress()
+                os.remove(os.path.join(directory, ".sorter_progress.json"))
+                window._begin_new_session(directory)
+                window.image_paths = [os.path.join(directory, "IMG_0.jpg")]
+                window.path_mtimes = {window.image_paths[0]: 0.0}
+                window.path_sort_keys = {
+                    window.image_paths[0]: (0.0, os.path.normcase(window.image_paths[0]))
+                }
+                window.current_index = 0
+                window.save_progress()
+                self.assertEqual(self.read(directory)["last_path"], window.image_paths[0])
+            finally:
+                self.close_window(window)
+
+
+class PreloadWindowCharacterizationTests(unittest.TestCase):
+    """Pin which previews request_cache asks for and which it evicts."""
+
+    class Window:
+        def __init__(self, count, current_index, cached=()):
+            self.image_paths = [f"IMG_{index}.jpg" for index in range(count)]
+            self.current_index = current_index
+            self.session_id = 3
+            self.cache = {
+                index: (None, {}, self.image_paths[index]) for index in cached
+            }
+            self.requests = []
+            self.saves = 0
+            outer = self
+
+            class Loader:
+                def update_window(self, session_id, requests):
+                    outer.requests.append((session_id, list(requests)))
+
+            self.loader = Loader()
+
+        def save_progress(self):
+            self.saves += 1
+
+    def run_window(self, count, current_index, cached=()):
+        window = self.Window(count, current_index, cached)
+        main.FastPhotoSorter.request_cache(window)
+        self.assertEqual(len(window.requests), 1)
+        session_id, requests = window.requests[0]
+        self.assertEqual(session_id, 3)
+        for index, path in requests:
+            self.assertEqual(path, window.image_paths[index])
+        self.assertEqual(window.saves, 1)
+        return window, sorted(index for index, _ in requests)
+
+    def test_window_is_previous_one_and_next_three(self):
+        window, requested = self.run_window(10, 5)
+        self.assertEqual(requested, [4, 5, 6, 7, 8])
+        self.assertEqual(window.cache, {})
+
+    def test_cached_entries_are_kept_and_not_requested_again(self):
+        window, requested = self.run_window(10, 5, cached=(0, 4, 7, 9))
+        self.assertEqual(requested, [5, 6, 8])
+        self.assertEqual(sorted(window.cache), [4, 7])
+
+    def test_window_is_clipped_at_both_ends(self):
+        _, requested = self.run_window(10, 0)
+        self.assertEqual(requested, [0, 1, 2, 3])
+        _, requested = self.run_window(10, 9)
+        self.assertEqual(requested, [8, 9])
+        _, requested = self.run_window(1, 0)
+        self.assertEqual(requested, [0])
+
+    def test_stale_cache_entry_for_other_path_is_requested(self):
+        window = self.Window(10, 5, cached=(5,))
+        window.cache[5] = (None, {}, "moved.jpg")
+        main.FastPhotoSorter.request_cache(window)
+        self.assertIn((5, "IMG_5.jpg"), window.requests[0][1])
 
 
 if __name__ == "__main__":
